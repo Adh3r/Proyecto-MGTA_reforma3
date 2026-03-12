@@ -1,109 +1,175 @@
-Markdown
+# MGTA — Simulador GDP · Barcelona LEBL
 
-# ✈️ MGTA — Simulador GDP Barcelona (LEBL)
-
-¡Buenas! Bienvenidos al repositorio del proyecto. Aquí tenemos el simulador del Ground Delay Program (GDP) para el aeropuerto de Barcelona. El código se encarga de aplicar las restricciones, simular las colas y generar automáticamente tanto los gráficos de resultados como el Excel final de auditoría.
-
-Para no volvernos locos pasándonos archivos `.zip` por WhatsApp y pisándonos el trabajo, vamos a centralizarlo todo aquí usando Git. A continuación os explico cómo ponerlo a funcionar en vuestros PCs.
+Simulador de Ground Delay Program para el aeropuerto de Barcelona El Prat.
+A partir de los datos de tráfico del día, ejecuta el modelo de Newell, aplica el algoritmo RBS de Eurocontrol y genera automáticamente un Excel de auditoría completo con KPIs operacionales, económicos y ambientales.
 
 ---
 
-## 🛠️ 1. Lo que necesitas instalar
+## Requisitos previos
 
-Antes de descargar el código, asegúrate de tener estas dos cosas:
+Antes de nada necesitáis tener instalado en vuestro ordenador:
 
-1. **Git**: Si no lo tienes, descárgalo e instálalo (siguiente, siguiente, siguiente...) desde https://git-scm.com/download/win.
-2. **Python**: Asegúrate de tener Python instalado y añadido al PATH de tu ordenador.
+- **Python 3.10 o superior** → https://www.python.org/downloads/
+  Durante la instalación, marcad la opción **"Add Python to PATH"**.
+- **Git** → https://git-scm.com/download/win
+  Instalad con todas las opciones por defecto.
+
+Para comprobar que ambos están correctamente instalados, abrid PowerShell y ejecutad:
+
+```bash
+python --version
+git --version
+```
+
+Deberíais ver algo como `Python 3.x.x` y `git version 2.x.x`.
 
 ---
 
-## 🚀 2. Cómo descargar y arrancar el proyecto
+## Instalación del proyecto
 
-Abrid la terminal (podéis usar la que viene integrada abajo en VS Code) y seguid estos pasos:
+```bash
+# 1. Clonad el repositorio en vuestro ordenador
+git clone https://github.com/TU_USUARIO/MGTA_reforma.git
 
-1. **Clonar el repositorio** (descargarlo a vuestro PC):
-   ```bash
-   git clone [https://github.com/TU_USUARIO/MGTA_reforma.git](https://github.com/TU_USUARIO/MGTA_reforma.git)
-   cd MGTA_reforma
+# 2. Entrad en la carpeta del proyecto
+cd MGTA_reforma
 
-    Instalar las librerías necesarias (pandas, matplotlib, etc.):
-    Bash
+# 3. Instalad las librerías necesarias
+pip install -r requirements.txt
 
-    pip install -r requirements.txt
+# 4. Comprobad que todo funciona
+python src/main.py
+```
 
-    ⚠️ IMPORTANTE: Los datos crudos (CSVs)
-    Los archivos de Excel originales (LEBL_10AUG2025.csv y fleet_cat_seat.csv) pesan demasiado y no se suben a GitHub. Pedídmelo por WhatsApp o Discord y metedlos a mano en la carpeta data/raw/ antes de ejecutar nada.
+Si el paso 4 termina sin errores y aparecen archivos en `data/processed/` y `output/figures/`, la instalación es correcta.
 
-    ¡Hacer la prueba de fuego!
-    Ejecutad el simulador para ver si todo funciona:
-    Bash
+> **Nota sobre los datos:** los CSV de tráfico no están en el repositorio porque pesan demasiado.
+> Pedídmelos y colocadlos manualmente en la carpeta `data/raw/` antes de ejecutar nada.
 
-    python src/main.py
+---
 
-    Si al terminar veis que han aparecido archivos nuevos en las carpetas data/processed/ y output/figures/, ¡enhorabuena, lo tenéis todo bien configurado!
+## Estructura del proyecto
 
-🚦 3. Reglas para trabajar en equipo (Git Flow)
+```
+MGTA_reforma/
+│
+├── data/
+│   ├── raw/                    # Aquí van los CSV de tráfico (pedídmelos, no están en el repo)
+│   └── processed/              # El Excel y CSV final se generan aquí al ejecutar main.py
+│
+├── debug/                      # Excels intermedios para depuración (ignorados por Git)
+│
+├── output/
+│   └── figures/                # Los 4 gráficos PNG se generan aquí al ejecutar main.py
+│
+├── src/
+│   ├── config.py               # ← PARÁMETROS DEL GDP (AAR, PAAR, horarios, costes...)
+│   ├── lib_data_prep.py        # Fase 1: limpieza de datos y cálculo cinemático
+│   ├── lib_gdp_core.py         # Fase 2: modelo de Newell y algoritmo RBS
+│   ├── lib_excel_export.py     # Fase 3: generación del Excel de auditoría
+│   ├── lib_ilp_solver.py       # Fase 2B: optimización ILP — en desarrollo
+│   └── main.py                 # Punto de entrada: ejecuta el proyecto completo
+│
+├── test/
+│   └── test_data_prep.py       # Tests automatizados de la Fase 1
+│
+├── .gitignore                  # Archivos que Git ignora (datos, outputs, caché...)
+├── requirements.txt            # Lista de librerías necesarias
+└── README.md                   # Este archivo
+```
 
-Para que no haya conflictos de código, tenemos una regla de oro:
-❌ Nadie trabaja ni hace cambios directamente en la rama main. Cada vez que vayáis a programar algo nuevo (un gráfico, arreglar un bug, etc.), hacedlo en una rama separada. Podéis hacerlo con los botones de VS Code o con la terminal:
-Bash
+**Regla general:** si solo queréis ejecutar el proyecto, lanzad `python src/main.py` y no toquéis nada más.
+Si necesitáis cambiar algún parámetro (capacidad del aeropuerto, horarios, costes), hacedlo únicamente en `src/config.py`.
 
-# 1. Antes de empezar a trabajar, asegúrate de tener la última versión de todo
+---
+
+## Flujo de trabajo en equipo
+
+Usamos Git para que cada uno pueda trabajar sin pisar el trabajo de los demás.
+La única regla importante: **nunca trabajéis directamente sobre la rama `main`**.
+
+### Al empezar cada sesión de trabajo
+
+```bash
+# Aseguraos de tener la última versión del proyecto
 git checkout main
 git pull
 
-# 2. Crea tu propia rama para trabajar (cambia el nombre por lo que vayas a hacer)
-git checkout -b feature/nombre-de-tu-tarea
+# Cread vuestra rama de trabajo con un nombre descriptivo
+git checkout -b feature/nombre-de-lo-que-vais-a-hacer
+```
 
-# ... TRABAJAS EN TU CÓDIGO, GUARDAS TUS ARCHIVOS ...
+### Mientras trabajáis
 
-# 3. Cuando termines y funcione, guarda los cambios en Git
+```bash
+# Ver qué archivos habéis modificado
+git status
+
+# Guardar vuestro progreso (haced esto cada vez que algo funcione)
 git add .
-git commit -m "feat: descripción corta de lo que has hecho"
+git commit -m "feat: descripción breve de qué habéis hecho"
+```
 
-# 4. Sube tu rama a GitHub
-git push origin feature/nombre-de-tu-tarea
+### Al terminar, para compartir vuestro trabajo
 
-Prefijos para los Commits:
-Por llevar un orden, empezad los mensajes del commit con una de estas palabras:
+```bash
+# Subid vuestra rama a GitHub
+git push origin feature/nombre-de-lo-que-vais-a-hacer
+```
 
-    feat: si habéis añadido algo nuevo (ej: feat: nuevo gráfico de equidad).
+En GitHub os aparecerá un botón verde **"Compare & pull request"**.
+Pulsadlo, escribid una descripción breve de qué habéis hecho y avisadme para revisarlo antes de integrarlo en `main`.
 
-    fix: si habéis arreglado un error (ej: fix: corregido solapamiento de texto en barras).
+### Convención de mensajes de commit
 
-    docs: si habéis tocado el README o comentarios.
+Usad siempre un prefijo para que el historial sea legible:
 
-Una vez hagáis el push, en la web de GitHub os saldrá un botón verde gigante que dice "Compare & pull request". Pulsadlo, dejad un comentario de lo que habéis hecho y avisad por el grupo para que le echemos un ojo y lo juntemos con el código principal (main).
-✅ 4. Tests: No rompas lo que ya funciona
+| Prefijo | Cuándo usarlo | Ejemplo |
+|---|---|---|
+| `feat:` | Añadís algo nuevo | `feat: implementar función de coste escalonada` |
+| `fix:` | Corregís un bug | `fix: corregir índice fuera de rango en parse_time` |
+| `docs:` | Cambios en documentación | `docs: actualizar README con instrucciones ILP` |
+| `test:` | Añadís o modificáis tests | `test: añadir casos límite para coste escalonado` |
 
-Antes de subir vuestra rama, pasad los tests automatizados para aseguraros de que vuestro nuevo código no ha roto la limpieza de datos ni las matemáticas del GDP:
-Bash
+---
 
+## Tests automatizados
+
+Los tests verifican que la base del proyecto funciona correctamente.
+Ejecutadlos siempre antes de hacer push para aseguraros de que no habéis roto nada:
+
+```bash
 python -m pytest test/ -v
+```
 
-Si la consola se pone verde y dice passed, vía libre para subir. Si hay algún FAILED en rojo, toca revisar qué ha fallado antes de hacer el push.
-📂 5. Mapa del Proyecto (Estructura)
+La salida esperada es `16 passed`. Si aparece algún `FAILED`, revisad el error antes de subir nada.
 
-Para que sepáis dónde está cada cosa:
-Plaintext
+---
 
-MGTA_reforma/
-├── data/
-│   ├── raw/               # CSVs originales (INTOCABLES - Añadir manualmente)
-│   └── processed/         # Entregables finales (Excel de auditoría, CSV final)
-├── debug/                 # Excels intermedios para buscar fallos
-├── output/
-│   └── figures/           # Gráficos PNG que sacaremos para el PowerPoint
-├── src/
-│   ├── config.py          # ⚙️ Fuente única de verdad: parámetros LVP, costes, etc.
-│   ├── lib_data_prep.py   # Fase 1: Limpieza de datos y cálculo de distancias
-│   ├── lib_gdp_core.py    # Fase 2: Matemáticas GDP (Newell, RBS, retrasos)
-│   ├── lib_excel_export.py# Fase 3: Construcción del Excel maestro
-│   ├── lib_ilp_solver.py  # Fase 2B: Optimización avanzada (en desarrollo)
-│   └── main.py            # 🚀 Punto de entrada: ejecuta todo el pipeline en orden
-├── test/
-│   └── test_data_prep.py  # Archivos de pruebas automatizadas
-├── .gitignore             # Archivos que GitHub debe ignorar
-└── requirements.txt       # Lista de librerías de Python
+## Librerías utilizadas
 
-    Tip rápido: Si queréis cambiar la hora a la que empieza el GDP o los costes por minuto para ver qué pasa, no toquéis el código; cambiadlo directamente en src/config.py.
+| Librería | Para qué se usa |
+|---|---|
+| `pandas` | Manipulación de datos tabulares |
+| `numpy` | Operaciones matemáticas y arrays |
+| `matplotlib` | Generación de gráficos |
+| `openpyxl` | Exportación del Excel de auditoría |
+| `pulp` | Solver de Programación Lineal Entera (ILP) |
+
+Todas se instalan de una vez con `pip install -r requirements.txt`.
+
+---
+
+## Problemas frecuentes
+
+**`ModuleNotFoundError: No module named 'config'`**
+Aseguraos de ejecutar los scripts desde la carpeta `src/` o de que vuestro IDE tiene `src/` en el path de Python.
+
+**`FileNotFoundError` al ejecutar `main.py`**
+Los CSV de datos no están en el repositorio. Pedídmelos y colocadlos en `data/raw/`.
+
+**`PermissionError` al generar el Excel**
+El archivo `auditoria_completa.xlsx` está abierto en Excel. Cerradlo y volved a ejecutar.
+
+**`pip` no se reconoce como comando**
+Python no se añadió al PATH durante la instalación. Desinstalad Python y volved a instalarlo marcando la opción **"Add Python to PATH"**.
