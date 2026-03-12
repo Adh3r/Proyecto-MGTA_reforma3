@@ -20,7 +20,7 @@ import pandas as pd
 
 # Importamos todas las constantes desde el archivo central.
 # Así, si cambia una velocidad o un prefijo ECAC, solo tocamos config.py.
-from config import CFG, ECAC_PREFIXES, VELOCIDAD_KNOTS
+from config import ECAC_PREFIXES, VELOCIDAD_KNOTS
 
 
 # =============================================================================
