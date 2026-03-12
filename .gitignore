@@ -1,0 +1,20 @@
+# Ocultar temporales de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ocultar configuraciones del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Ocultar archivos generados por el simulador (¡Cada uno los genera en su PC!)
+data/processed/
+output/figures/
+debug/
+reports/
+
+# NOTA: NO ignoramos data/raw/ porque tus compañeros 
+# necesitan los CSV originales para correr el código.
+
+# Ocultar configuración local de VS Code
+.vscode/
