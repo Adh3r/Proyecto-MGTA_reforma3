@@ -11,11 +11,12 @@
 #   2. etiquetar_vuelos_gdp()   → Clasificar vuelos: regulados vs. exentos.
 #   3. asignar_slots_rbs()      → Algoritmo Ration-By-Schedule.
 #   4. calcular_delays()        → Separar retraso en aire vs. tierra.
-#   5. calcular_kpis_economicos() → Fuente única de verdad para costes/CO2.
-#   6. plot_*()                 → Un gráfico, una función.
-#   7. generar_graficos()       → Orquestador de todos los plots.
-#   8. exportar_auditoria_excel() → Genera el Excel final de entregable.
-#   9. ejecutar_nucleo_gdp()    → Orquestador principal de todo el módulo.
+#   5. calcular_retraso_minimo_newell()        → Calcular area curva de Newell.
+#   6. calcular_kpis_economicos() → Fuente única de verdad para costes/CO2.
+#   67. plot_*()                 → Un gráfico, una función.
+#   8. generar_graficos()       → Orquestador de todos los plots.
+#   9. exportar_auditoria_excel() → Genera el Excel final de entregable.
+#   10. ejecutar_nucleo_gdp()    → Orquestador principal de todo el módulo.
 # =============================================================================
 
 import os
