@@ -13,8 +13,10 @@ Antes de nada necesitáis tener instalado en vuestro ordenador:
   Durante la instalación, marcad la opción **"Add Python to PATH"**.
 - **Git** → https://git-scm.com/download/win
   Instalad con todas las opciones por defecto.
+- **VS Code** → https://code.visualstudio.com/
+  Editor recomendado para trabajar en el proyecto.
 
-Para comprobar que ambos están correctamente instalados, abrid PowerShell y ejecutad:
+Para comprobar que Python y Git están correctamente instalados, abrid PowerShell y ejecutad:
 
 ```bash
 python --version
@@ -25,103 +27,108 @@ Deberíais ver algo como `Python 3.x.x` y `git version 2.x.x`.
 
 ---
 
-## Instalación del proyecto
+## Configuración de VS Code (solo la primera vez)
+
+### 1. Instalar la extensión de GitHub
+
+1. Abrid VS Code
+2. Pulsad `Ctrl+Shift+X` para abrir el panel de extensiones
+3. Buscad **"GitHub Pull Requests"** e instaladla
+4. Reiniciad VS Code
+
+### 2. Conectar VS Code con vuestra cuenta de GitHub
+
+1. Pulsad `Ctrl+Shift+P` para abrir la paleta de comandos
+2. Escribid `Git: Clone` y pulsad Enter
+3. VS Code os pedirá que iniciéis sesión en GitHub — seguid los pasos en el navegador
+4. Una vez autenticados, no tendréis que volver a hacerlo
+
+---
+
+## Unirse al proyecto (solo la primera vez)
+
+### Opción A — Desde VS Code (recomendado para novatos)
+
+1. Abrid VS Code
+2. Pulsad `Ctrl+Shift+P` → escribid `Git: Clone` → Enter
+3. Pegad esta URL: `https://github.com/TU_USUARIO/MGTA_reforma.git`
+4. Elegid una carpeta de vuestro ordenador donde guardar el proyecto
+5. VS Code os preguntará si queréis abrir el repositorio clonado — decid que sí
+6. Abrid la terminal integrada con `Ctrl+ñ` e instalad las librerías:
 
 ```bash
-# 1. Clonad el repositorio en vuestro ordenador
-git clone https://github.com/TU_USUARIO/MGTA_reforma.git
-
-# 2. Entrad en la carpeta del proyecto
-cd MGTA_reforma
-
-# 3. Instalad las librerías necesarias
 pip install -r requirements.txt
+```
 
-# 4. Comprobad que todo funciona
+### Opción B — Desde la terminal
+
+```bash
+git clone https://github.com/TU_USUARIO/MGTA_reforma.git
+cd MGTA_reforma
+pip install -r requirements.txt
+```
+
+### Verificad que todo funciona
+
+```bash
 python src/main.py
 ```
 
-Si el paso 4 termina sin errores y aparecen archivos en `data/processed/` y `output/figures/`, la instalación es correcta.
+Si se generan archivos en `data/processed/` y `output/figures/`, la instalación es correcta.
 
-> **Nota sobre los resultados:** los excel de resultados no os aparecerán al descargar porque al depender de el resto del código se presume que canviarán en cada caso de uso.
-
----
-
-## Estructura del proyecto
-
-```
-MGTA_reforma/
-│
-├── data/
-│   ├── raw/                    # Aquí van los CSV de tráfico (pedídmelos, no están en el repo)
-│   └── processed/              # El Excel y CSV final se generan aquí al ejecutar main.py
-│
-├── debug/                      # Excels intermedios para depuración (ignorados por Git)
-│
-├── output/
-│   └── figures/                # Los 4 gráficos PNG se generan aquí al ejecutar main.py
-│
-├── src/
-│   ├── config.py               # ← PARÁMETROS DEL GDP (AAR, PAAR, horarios, costes...)
-│   ├── lib_data_prep.py        # Fase 1: limpieza de datos y cálculo cinemático
-│   ├── lib_gdp_core.py         # Fase 2: modelo de Newell y algoritmo RBS
-│   ├── lib_excel_export.py     # Fase 3: generación del Excel de auditoría
-│   ├── lib_ilp_solver.py       # Fase 2B: optimización ILP — en desarrollo
-│   └── main.py                 # Punto de entrada: ejecuta el proyecto completo
-│
-├── test/
-│   └── test_data_prep.py       # Tests automatizados de la Fase 1
-│
-├── .gitignore                  # Archivos que Git ignora (datos, outputs, caché...)
-├── requirements.txt            # Lista de librerías necesarias
-└── README.md                   # Este archivo
-```
-
-**Regla general:** si solo queréis ejecutar el proyecto, lanzad `python src/main.py` y no toquéis nada más.
-Si necesitáis cambiar algún parámetro (capacidad del aeropuerto, horarios, costes), hacedlo únicamente en `src/config.py`.
+> **Nota sobre los datos:** los CSV de tráfico están en el repositorio dentro de `data/raw/`.
+> Si no os aparecen, pedídmelos.
 
 ---
 
-## Flujo de trabajo en equipo
+## Ramas de trabajo
 
-Usamos Git para que cada uno pueda trabajar sin pisar el trabajo de los demás.
-La única regla importante: **nunca trabajéis directamente sobre la rama `main`**.
+El proyecto tiene dos ramas principales:
 
-### Al empezar cada sesión de trabajo
+| Rama | Propósito |
+|---|---|
+| `main` | Código estable y revisado. No se toca directamente. |
+| `feature/ilp-solver` | Desarrollo del bloque ILP — aquí es donde trabajáis vosotros. |
+
+### Cambiar a la rama ILP desde VS Code
+
+En la esquina inferior izquierda de VS Code veréis el nombre de la rama actual (probablemente `main`). Haced clic ahí y seleccionad `feature/ilp-solver` de la lista. Si no aparece, ejecutad en la terminal:
 
 ```bash
-# Aseguraos de tener la última versión del proyecto
-git checkout main
-git pull
-
-# Cread vuestra rama de trabajo con un nombre descriptivo
-git checkout -b feature/nombre-de-lo-que-vais-a-hacer
+git fetch
+git checkout feature/ilp-solver
 ```
+
+---
+
+## Flujo de trabajo diario
+
+### Al empezar cada sesión
+
+```bash
+# Aseguraos de estar en la rama correcta y tener lo último
+git checkout feature/ilp-solver
+git pull
+```
+
+O desde VS Code: clic en la rama (esquina inferior izquierda) → seleccionad `feature/ilp-solver` → clic en el icono de sincronización en la barra inferior.
 
 ### Mientras trabajáis
 
-```bash
-# Ver qué archivos habéis modificado
-git status
+Cada vez que terminéis algo que funciona, guardad vuestro progreso:
 
-# Guardar vuestro progreso (haced esto cada vez que algo funcione)
+```bash
 git add .
-git commit -m "feat: descripción breve de qué habéis hecho"
+git commit -m "feat: descripción de qué habéis hecho"
+git push origin feature/ilp-solver
 ```
 
-### Al terminar, para compartir vuestro trabajo
-
-```bash
-# Subid vuestra rama a GitHub
-git push origin feature/nombre-de-lo-que-vais-a-hacer
-```
-
-En GitHub os aparecerá un botón verde **"Compare & pull request"**.
-Pulsadlo, escribid una descripción breve de qué habéis hecho y avisadme para revisarlo antes de integrarlo en `main`.
+O desde VS Code (`Ctrl+Shift+G`):
+1. Clic en **+** junto a Cambios para añadir todo
+2. Escribid el mensaje del commit
+3. **Confirmar** → **Sincronizar cambios**
 
 ### Convención de mensajes de commit
-
-Usad siempre un prefijo para que el historial sea legible:
 
 | Prefijo | Cuándo usarlo | Ejemplo |
 |---|---|---|
@@ -134,14 +141,49 @@ Usad siempre un prefijo para que el historial sea legible:
 
 ## Tests automatizados
 
-Los tests verifican que la base del proyecto funciona correctamente.
-Ejecutadlos siempre antes de hacer push para aseguraros de que no habéis roto nada:
+Ejecutadlos siempre antes de hacer push:
 
 ```bash
 python -m pytest test/ -v
 ```
 
 La salida esperada es `16 passed`. Si aparece algún `FAILED`, revisad el error antes de subir nada.
+
+---
+
+## Estructura del proyecto
+
+```
+MGTA_reforma/
+│
+├── data/
+│   ├── raw/                    # CSV de tráfico (en el repositorio)
+│   └── processed/              # El Excel y CSV final se generan aquí al ejecutar main.py
+│
+├── debug/                      # Excels intermedios para depuración
+│
+├── output/
+│   └── figures/                # Los 4 gráficos PNG se generan aquí al ejecutar main.py
+│
+├── src/
+│   ├── config.py               # ← PARÁMETROS DEL GDP (AAR, PAAR, horarios, costes...)
+│   ├── lib_data_prep.py        # Fase 1: limpieza de datos y cálculo cinemático
+│   ├── lib_gdp_core.py         # Fase 2: modelo de Newell y algoritmo RBS
+│   ├── lib_excel_export.py     # Fase 3: generación del Excel de auditoría
+│   ├── lib_ilp_solver.py       # Fase 2B: optimización ILP — (en desarrollo)
+│   └── main.py                 # Punto de entrada: ejecuta el proyecto completo
+│
+├── test/
+│   └── test_data_prep.py       # Tests automatizados de la Fase 1
+│
+├── .gitignore
+├── requirements.txt
+└── README.md
+```
+
+**Si solo queréis ejecutar el proyecto:** `python src/main.py`
+**Si necesitáis cambiar parámetros** (capacidad, horarios, costes): editad solo `src/config.py`
+**El trabajo del WP3 va en:** `src/lib_ilp_solver.py`
 
 ---
 
@@ -172,3 +214,6 @@ El archivo `auditoria_completa.xlsx` está abierto en Excel. Cerradlo y volved a
 
 **`pip` no se reconoce como comando**
 Python no se añadió al PATH durante la instalación. Desinstalad Python y volved a instalarlo marcando la opción **"Add Python to PATH"**.
+
+**La rama `feature/ilp-solver` no me aparece en VS Code**
+Ejecutad `git fetch` en la terminal para que VS Code descargue la lista de ramas del servidor.

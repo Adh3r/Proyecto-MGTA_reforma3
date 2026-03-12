@@ -4,15 +4,12 @@
 #
 # Cómo instalar todo de una vez:
 #   pip install -r requirements.txt
-#
-# Cómo generar este archivo automáticamente en el futuro (con el entorno activo):
-#   pip freeze > requirements.txt
 # =============================================================================
 
 # Manipulación y análisis de datos tabulares (DataFrames)
 pandas>=2.0.0
 
-# Operaciones matemáticas y arrays numéricos (usado para np.where, np.select...)
+# Operaciones matemáticas y arrays numéricos (np.where, np.select...)
 numpy>=1.24.0
 
 # Generación de gráficos (diagramas de Newell, balance de capacidad, etc.)
@@ -21,5 +18,8 @@ matplotlib>=3.7.0
 # Exportación de archivos Excel con múltiples pestañas (.xlsx)
 openpyxl>=3.1.0
 
-# Tests automatizados (incluido en Python 3, no necesita instalación extra)
-# pytest>=7.0.0  # Descomenta esta línea si prefieres pytest sobre unittest
+# Solver de Programación Lineal Entera — equivalente a intlinprog de MATLAB
+pulp>=2.7.0
+
+# Tests automatizados
+pytest>=7.0.0
