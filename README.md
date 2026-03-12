@@ -43,8 +43,7 @@ python src/main.py
 
 Si el paso 4 termina sin errores y aparecen archivos en `data/processed/` y `output/figures/`, la instalación es correcta.
 
-> **Nota sobre los datos:** los CSV de tráfico no están en el repositorio porque pesan demasiado.
-> Pedídmelos y colocadlos manualmente en la carpeta `data/raw/` antes de ejecutar nada.
+> **Nota sobre los resultados:** los excel de resultados no os aparecerán al descargar porque al depender de el resto del código se presume que canviarán en cada caso de uso.
 
 ---
 
