@@ -259,7 +259,7 @@ def asignar_slots_rbs(
 
 
 # =============================================================================
-# 4. CÁLCULO DE RETRASOS — AIRE VS. TIERRA
+# 4. CÁLCULO DE RETRASOS — AIRE VS. TIERRA Y RETRASO MÍNIMO NEWELL
 # =============================================================================
 
 def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
@@ -292,6 +292,14 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def calcular_retraso_minimo_newell(timeline: pd.DataFrame) -> float:
+    """
+    Retraso mínimo teórico impuesto por la restricción de capacidad.
+    Es el área entre la curva de demanda y la curva de capacidad
+    en el diagrama de Newell. Representa el mínimo inevitable
+    independientemente del algoritmo de asignación usado.
+    """
+    return (timeline['demand_accum'] - timeline['capacity_accum']).clip(lower=0).sum()
 
 # =============================================================================
 # 5. KPIs ECONÓMICOS Y AMBIENTALES — FUENTE ÚNICA DE VERDAD

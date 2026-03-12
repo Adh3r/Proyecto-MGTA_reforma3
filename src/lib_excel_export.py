@@ -35,7 +35,7 @@ from openpyxl.styles import (
 from openpyxl.utils import get_column_letter
 
 from config import CO2_AIR_MIN, CO2_GND_MIN, COST_AIR_MIN, COST_GND_MIN
-from lib_gdp_core import calcular_kpis_economicos
+from lib_gdp_core import calcular_kpis_economicos, calcular_retraso_minimo_newell
 
 
 # =============================================================================
@@ -205,11 +205,13 @@ def _congelar_primera_fila(ws) -> None:
 # FUNCIONES DE PESTAÑA — Una función, una hoja
 # =============================================================================
 
-def _sheet_parametros(wb, params: dict, h_noreg: int) -> None:
+def _sheet_parametros(wb, params: dict, h_noreg: int, timeline: pd.DataFrame) -> None:
     """Pestaña 0: Parámetros operacionales del escenario simulado."""
 
     def min_a_hhmm(m: float) -> str:
         return f"{int(m)//60:02d}:{int(m)%60:02d} UTC"
+
+    r_min_newell = int(calcular_retraso_minimo_newell(timeline))
 
     dur_reg   = params['H_END'] - params['H_START']
     dur_total = h_noreg - params['H_START']
@@ -231,6 +233,7 @@ def _sheet_parametros(wb, params: dict, h_noreg: int) -> None:
             'Fin de Regulación (H_END)',
             'Duración de la Regulación',
             'Fin del Impacto — Cola Disuelta (H_NOREG)',
+            'Retraso mínimo teórico',
             'Duración Total del Impacto',
             'Ventana de Congelación CTOT',
             '── COBERTURA ───────────────────────────────',
@@ -257,6 +260,7 @@ def _sheet_parametros(wb, params: dict, h_noreg: int) -> None:
             min_a_hhmm(params['H_END']),
             f"{dur_reg} min  ({dur_reg//60}h {dur_reg%60}min)",
             min_a_hhmm(h_noreg),
+            f"{r_min_newell} min ", 
             f"{dur_total} min desde inicio  ({dur_total//60}h {dur_total%60}min)",
             f"{params.get('H_FREEZE_OFFSET', 150)} min antes de H_START",
             '',
@@ -273,7 +277,7 @@ def _sheet_parametros(wb, params: dict, h_noreg: int) -> None:
             'Carta AIP LEBL', 'Carta AIP LEBL LVP',
             'Calculado', 'Calculado a partir de AAR', 'Calculado a partir de PAAR',
             '', 'Input de simulación', 'Input de simulación',
-            'Calculado', 'Calculado por modelo de Newell', 'Calculado',
+            'Calculado', 'Calculado por modelo de Newell', 'Calculado','Calculando',
             'Estándar Eurocontrol CTOT', '',
             'Eurocontrol GDP Reference Manual', 'Definición ECAC Doc 30',
             '', 'Eurocontrol Standard Inputs 2024',
@@ -309,7 +313,7 @@ def _sheet_regulacion_gdp(wb, df_res: pd.DataFrame) -> None:
     df_export = (
         df_res[cols].copy()
         .sort_values('minutes_eta')
-        .rename(columns={'minutes_eta': 'ETA_Prog', 'assigned_slot': 'ATA_Real'})
+        .rename(columns={'minutes_eta': 'ETA_Prog', 'assigned_slot': 'CTA'})
         .reset_index(drop=True)
     )
     ws = wb.create_sheet('2_Regulacion_GDP')
@@ -570,6 +574,7 @@ def exportar_auditoria_excel(
     df_slots: pd.DataFrame,
     params: dict,
     h_noreg: int,
+    timeline,
     path: str,
 ) -> None:
     """
@@ -610,7 +615,7 @@ def exportar_auditoria_excel(
             del wb['_tmp']
 
         # Construir cada pestaña — añade aquí nuevas hojas cuando las necesites
-        _sheet_parametros(wb, params, h_noreg)
+        _sheet_parametros(wb, params, h_noreg, timeline)
         _sheet_datos_crudos(wb, df_vuelos_crudo)
         _sheet_regulacion_gdp(wb, df_res)
         _sheet_matriz_slots(wb, df_slots)

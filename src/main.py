@@ -117,6 +117,7 @@ def ejecutar_proyecto_completo() -> None:
         df_slots,                      # Pestaña 3: matriz de slots
         resultados['params'],
         resultados['h_noreg'],
+        resultados['timeline'],
         PATH_OUTPUT_EXCEL,
     )
 
