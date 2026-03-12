@@ -1,0 +1,31 @@
+New-Item -ItemType File data/processed/.gitkeep
+New-Item -ItemType File output/figures/.gitkeep
+New-Item -ItemType File debug/.gitkeep
+```
+
+**2. Actualizar el `.gitignore`** para que ignore el contenido de esas carpetas pero no el `.gitkeep`:
+```
+# Datos crudos
+data/raw/
+
+# Ignorar contenido generado pero mantener la estructura de carpetas
+data/processed/*
+!data/processed/.gitkeep
+
+output/figures/*
+!output/figures/.gitkeep
+
+debug/*
+!debug/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# Sistemas operativos
+.DS_Store
+Thumbs.db
