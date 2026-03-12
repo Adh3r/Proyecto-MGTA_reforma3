@@ -1,11 +1,27 @@
-# Ocultar temporales de Python
+# Datos crudos y entregables generados
+data/processed/*
+!data/processed/.gitkeep
+
+# Outputs generados al ejecutar main.py
+output/figures/*
+!output/figures/.gitkeep
+
+debug/*
+!debug/.gitkeep
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Ocultar configuraciones del sistema operativo
+# Entornos virtuales
+.env
+venv/
+.venv/
+
+# Editores e IDEs
+.vscode/
+
+# Sistemas operativos
 .DS_Store
 Thumbs.db
-
-# Ocultar configuración local de VS Code
-.vscode/
