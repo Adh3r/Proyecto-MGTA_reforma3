@@ -54,16 +54,12 @@ def parse_time_to_minutes(time_str: str) -> float:
     try:
         # Dividimos "HH:MM:SS" por ":" y convertimos cada parte a entero.
         parts = list(map(int, str(time_str).split(':')))
-
+        
         if len(parts) == 3:
-            # Formato con segundos: horas*60 + minutos + segundos/60
-            return parts[0] * 60 + parts[1] + (parts[2] / 60.0)
+            return parts[0] * 60 + parts[1] + parts[2] / 60
         elif len(parts) == 2:
-            # Formato sin segundos: horas*60 + minutos
             return parts[0] * 60 + parts[1]
         elif len(parts) == 1:
-            # Valor sin formato HH:MM — asumimos que ya está en minutos
-            # Ej: "15" → 15.0 minutos de taxi time
             return float(parts[0])
         else:
             return 0.0
@@ -131,6 +127,10 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
         how='left',
     )
 
+    # Si un avión no está en el catálogo, asignamos categoría 'D' (Heavy estándar)
+    # para no dejar NaN en una columna que usaremos para calcular velocidades.
+    df['recat'] = df['recat'].fillna('D')
+
     # -------------------------------------------------------------------------
     # PASO 4: Conversión de tiempos a minutos
     # Pasamos de strings "HH:MM" a un número flotante (ej: 390.5 min).
@@ -173,6 +173,45 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
 
     # Distancia en km; .clip(lower=0) evita distancias negativas por datos sucios
     df['distancia_km'] = (air_time_hours * speed_kts * 1.852).clip(lower=0)
+
+    # -------------------------------------------------------------------------
+    # PASO 7: Emisiones CO2 por vuelo — modelo Delgado et al. (2025)
+    #
+    # Fuente: Montlaur, A., Trapote-Barreira, C., & Delgado, L. (2025).
+    #   Analytical Models of Flight Fuel Consumption and Non-CO2 Emissions
+    #   as a Function of Aircraft Capacity. Applied Sciences, 15(17), 9688.
+    #   https://doi.org/10.3390/app15179688
+    #
+    # El modelo calcula gCO2/ASK (gramos por asiento×km disponible).
+    # Para obtener kg totales del vuelo:
+    #   co2_kg = compute_co2_ask(dist, seats) [gCO2/ASK]
+    #            × dist [km] × seats [ASK/km]
+    #            / 1000 [g→kg]
+    #
+    # Usamos force=True porque algunos vuelos cortos o de flota inusual pueden
+    # estar fuera del rango nominal del modelo (100–12000 km, 50–365 asientos).
+    # En esos casos el modelo extrapola en lugar de lanzar un ValueError.
+    #
+    # duration_min se reutiliza del paso 6 (ya calculado arriba).
+    # -------------------------------------------------------------------------
+    from emissions_fuel_model import compute_co2_ask
+
+    def _calcular_co2_vuelo(row) -> float:
+        dist  = row['distancia_km']
+        seats = row['size_seats_avg']
+        dur   = row['minutes_eta'] - row['minutes_etd']
+        if dur < 0:
+            dur += 1440  # vuelo que cruza medianoche
+        # Si no tenemos distancia, asientos o duración válidos → 0
+        if dist <= 0 or seats <= 0 or dur <= 0:
+            return 0.0
+        co2_per_ask = compute_co2_ask(dist, int(seats), force=True)  # gCO2/ASK
+        return round(co2_per_ask * dist * seats / 1000, 2)           # kg totales
+
+    df['co2_kg_vuelo']    = df.apply(_calcular_co2_vuelo, axis=1)
+    df['duracion_vuelo_min'] = np.where(
+        duration_min <= 0, duration_min + 1440, duration_min
+    ).clip(min=1)  # mínimo 1 min para evitar división por cero en GDP core
 
     # -------------------------------------------------------------------------
     # PASO FINAL: Ordenar por ETA

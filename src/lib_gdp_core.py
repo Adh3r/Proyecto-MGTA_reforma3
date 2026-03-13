@@ -19,8 +19,6 @@
 # =============================================================================
 
 import os
-
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -29,8 +27,6 @@ from config import (
     CFG,
     COST_AIR_MIN,
     COST_GND_MIN,
-    CO2_AIR_MIN,
-    CO2_GND_MIN,
 )
 
 
@@ -140,6 +136,7 @@ def etiquetar_vuelos_gdp(
     df_vuelos: pd.DataFrame,
     h_start: int,
     radius_km: int = CFG.GDP_RADIUS_KM,
+    h_freeze_offset: int = CFG.H_FREEZE_OFFSET,
 ) -> pd.DataFrame:
     """
     Clasifica cada vuelo en una de estas categorías:
@@ -147,39 +144,39 @@ def etiquetar_vuelos_gdp(
         - EXEMPT INTERNATIONAL: Vuelo de fuera del espacio ECAC.
         - EXEMPT AIRBORNE:     Vuelo ya en el aire cuando se activa el GDP.
         - EXEMPT DISTANCE:     Vuelo demasiado lejos para ser regulado.
-
+ 
     La lógica de prioridad importa: un vuelo intercontinental NO se marca
     como "airborne" aunque ya haya despegado; se marca como "international".
-
+ 
     Args:
         df_vuelos: DataFrame con flags is_ecac, minutes_etd, distancia_km.
         h_start:   Minuto de inicio del GDP (desde config.py: CFG.H_START).
         radius_km: Radio máximo de cobertura del GDP en kilómetros.
-
+ 
     Returns:
         Copia del DataFrame con columnas nuevas:
         is_departed, is_inside_radius, is_gpd_candidate, flight_status.
     """
     df = df_vuelos.copy()
-
+ 
     # Minuto de "congelación": si un vuelo despegó antes de este momento,
     # ya está volando y no puede recibir un CTOT (clearance to take-off time).
     # H_FREEZE_OFFSET viene de config.py (valor estándar: 150 min).
-    h_freeze = h_start - CFG.H_FREEZE_OFFSET
-
+    h_freeze = h_start - h_freeze_offset
+ 
     # Flag 1: ¿El vuelo ya ha despegado antes de la ventana de congelación?
     df['is_departed'] = df['minutes_etd'] < h_freeze
-
+ 
     # Flag 2: ¿Está el aeropuerto de origen dentro del radio de cobertura?
     df['is_inside_radius'] = df['distancia_km'] <= radius_km
-
+ 
     # Un vuelo es candidato SOLO si cumple las 3 condiciones:
     df['is_gpd_candidate'] = (
         df['is_ecac']           # 1. Origen en espacio ECAC
         & ~df['is_departed']    # 2. Aún en tierra cuando se activa el GDP
         & df['is_inside_radius']# 3. Dentro del radio de cobertura
     )
-
+ 
     # np.select evalúa las condiciones en orden; la primera que sea True gana.
     # 'default' captura cualquier caso no previsto (debería ser imposible aquí).
     conds = [
@@ -195,7 +192,7 @@ def etiquetar_vuelos_gdp(
         'EXEMPT DISTANCE',
     ]
     df['flight_status'] = np.select(conds, labels, default='UNKNOWN')
-
+ 
     return df
 
 
@@ -292,6 +289,15 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def calcular_retraso_minimo_newell(timeline: pd.DataFrame) -> float:
+    """
+    Retraso mínimo teórico impuesto por la restricción de capacidad.
+    Es el área entre la curva de demanda y la curva de capacidad
+    en el diagrama de Newell. Representa el mínimo inevitable
+    independientemente del algoritmo de asignación usado.
+    """
+    return (timeline['demand_accum'] - timeline['capacity_accum']).clip(lower=0).sum()
+
 
 # =============================================================================
 # 5. KPIs ECONÓMICOS Y AMBIENTALES — FUENTE ÚNICA DE VERDAD
@@ -301,248 +307,178 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     """
     Calcula todos los KPIs de coste y CO2 en un único lugar.
 
-    ¿Por qué una función separada?
-        Antes, estos cálculos estaban duplicados en generar_graficos() y en
-        exportar_auditoria_excel(). Si cambiabas COST_AIR_MIN en config.py,
-        el gráfico y el Excel podían mostrar valores distintos. Ahora ambos
-        llaman a esta misma función y siempre son coherentes.
+    COSTES:
+        Do-Nothing: todo el retraso ocurre en el aire → total_delay × COST_AIR_MIN.
+        GDP:        retraso separado en aire (caro) y tierra (barato).
 
-    Lógica:
-        Escenario "Do-Nothing": Si no hubiera GDP, TODO el retraso ocurriría
-        en el aire (el más caro). Usamos el retraso total × COST_AIR_MIN.
+    EMISIONES CO2 — modelo proporcional (Delgado et al., 2025):
+        co2_kg_vuelo es el CO2 del vuelo completo en condiciones normales,
+        calculado en lib_data_prep.py usando la distancia y los asientos.
 
-        Escenario "GDP": El retraso se separa. Los candidatos esperan en tierra
-        (más barato). Solo los exentos acumulan retraso en el aire.
+        Do-Nothing: todos los vuelos emiten su co2_kg_vuelo completo, más
+        el CO2 extra del retraso en el aire (proporcional a la duración).
+
+            co2_baseline = Σ co2_kg_vuelo × (1 + total_delay / duracion_vuelo)
+
+        GDP: el retraso en tierra sustituye al retraso en el aire, ahorrando
+        las emisiones proporcionales a ese tiempo:
+
+            co2_gdp = Σ co2_kg_vuelo × (1 + air_delay / duracion_vuelo)
+
+        El ahorro es exactamente:
+            co2_savings = Σ co2_kg_vuelo × (ground_delay / duracion_vuelo)
 
     Args:
-        df_res: DataFrame con columnas total_delay, air_delay, ground_delay.
+        df_res: DataFrame con columnas total_delay, air_delay, ground_delay,
+                co2_kg_vuelo y duracion_vuelo_min.
 
     Returns:
         Diccionario con 6 métricas: cost_baseline, cost_gdp, cost_savings,
-        co2_baseline, co2_gdp, co2_savings.
+        co2_baseline, co2_gdp, co2_savings. Todos en € o kg respectivamente.
     """
     r_total  = df_res['total_delay'].sum()
     r_aire   = df_res['air_delay'].sum()
     r_tierra = df_res['ground_delay'].sum()
 
-    cost_baseline = r_total  * COST_AIR_MIN
-    cost_gdp      = r_aire   * COST_AIR_MIN + r_tierra * COST_GND_MIN
+    cost_baseline = r_total * COST_AIR_MIN
+    cost_gdp      = r_aire  * COST_AIR_MIN + r_tierra * COST_GND_MIN
 
-    co2_baseline  = r_total  * CO2_AIR_MIN
-    co2_gdp       = r_aire   * CO2_AIR_MIN  + r_tierra * CO2_GND_MIN
+    # CO2 proporcional por vuelo — requiere columnas del modelo Delgado
+    dur = df_res['duracion_vuelo_min'].clip(lower=1)   # evitar división por 0
+    co2 = df_res['co2_kg_vuelo']
+
+    co2_baseline = (co2 * (1 + df_res['total_delay'] / dur)).sum()
+    co2_gdp      = (co2 * (1 + df_res['air_delay']   / dur)).sum()
+    
+    co2_aire_delay   = (co2 * (df_res['air_delay']   / dur)).sum()
+    co2_tierra_delay = (co2 * (df_res['ground_delay'] / dur)).sum()
+
+    unrecoverable = df_res[df_res['flight_status'] == 'EXEMPT AIRBORNE']['total_delay'].sum()
 
     return {
-        'cost_baseline': round(cost_baseline, 2),
-        'cost_gdp':      round(cost_gdp, 2),
-        'cost_savings':  round(cost_baseline - cost_gdp, 2),
-        'co2_baseline':  round(co2_baseline, 2),
-        'co2_gdp':       round(co2_gdp, 2),
-        'co2_savings':   round(co2_baseline - co2_gdp, 2),
+        'cost_baseline':      round(cost_baseline, 2),
+        'cost_gdp':           round(cost_gdp, 2),
+        'cost_savings':       round(cost_baseline - cost_gdp, 2),
+        'co2_baseline':       round(co2_baseline, 2),
+        'co2_gdp':            round(co2_gdp, 2),
+        'co2_savings':        round(co2_baseline - co2_gdp, 2),
+        'co2_aire_delay':     round(co2_aire_delay, 2),
+        'co2_tierra_delay':   round(co2_tierra_delay, 2),
+        'unrecoverable_delay': round(unrecoverable, 2),   # ← NUEVO
     }
 
-
 # =============================================================================
-# 6. GRÁFICOS — UN PLOT, UNA FUNCIÓN
+# 7. EXPORTACIÓN DEL EXCEL DE AUDITORÍA
 # =============================================================================
 
-def plot_newell(
-    timeline: pd.DataFrame,
-    params: dict,
-    h_noreg: int,
-    path: str,
-) -> None:
-    """
-    Gráfico 1: Diagrama de flujo acumulado (Modelo de Newell).
-
-    Muestra la demanda acumulada vs. la capacidad acumulada a lo largo del día.
-    El área entre ambas curvas representa la cola de vuelos retrasados.
-    """
-    plt.figure(figsize=(12, 6))
-
-    plt.plot(
-        timeline['minuto'] / 60, timeline['demand_accum'],
-        label='Cumulative Demand (ETA)', color='cornflowerblue', linewidth=2,
-    )
-    plt.plot(
-        timeline['minuto'] / 60, timeline['capacity_accum'],
-        '--', label='Cumulative Service (RTA)', color='hotpink', linewidth=2,
-    )
-    plt.fill_between(
-        timeline['minuto'] / 60,
-        timeline['demand_accum'], timeline['capacity_accum'],
-        color='plum', alpha=0.5, label='Delay / Queue',
-    )
-
-    # Líneas verticales para marcar los hitos del GDP
-    plt.axvline(x=params['H_START'] / 60, color='palevioletred',  linestyle=':', label='Regulation Start')
-    plt.axvline(x=params['H_END']   / 60, color='mediumaquamarine', linestyle=':', label='Regulation End')
-    plt.axvline(x=h_noreg           / 60, color='midnightblue',   linestyle='-.', label='H_NOREG (queue cleared)')
-
-    plt.title("Cumulative Flow Diagram (Newell Model)", fontsize=14, fontweight='bold')
-    plt.xlabel("UTC Time (Local BCN)", fontsize=12)
-    plt.ylabel("Cumulative Number of Aircraft", fontsize=12)
-    plt.legend()
-    plt.grid(True, alpha=0.4)
-    plt.savefig(path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def plot_balance_capacidad(
-    timeline: pd.DataFrame,
-    df_vuelos: pd.DataFrame,
-    params: dict,
-    path: str,
-) -> None:
-    """
-    Gráfico 2: Balance de capacidad horario (demanda vs. tráfico servido).
-
-    Compara la demanda original (barras azules) con el tráfico realmente
-    servido (barras oscuras) y la capacidad declarada (línea rosa).
-    Permite ver visualmente las horas en las que el aeropuerto está saturado.
-    """
-    plt.figure(figsize=(12, 6))
-
-    # Agrupamos vuelos por hora del día para mostrar barras horarias
-    df_vuelos = df_vuelos.copy()
-    df_vuelos['hour_bin'] = (df_vuelos['minutes_eta'] // 60).astype(int)
-    hourly_demand = df_vuelos.groupby('hour_bin').size().reindex(range(24), fill_value=0)
-
-    # Calculamos el throughput real hora a hora desde la curva de capacidad
-    hourly_throughput = []
-    for h in range(24):
-        t_s = h * 60
-        t_e = min((h + 1) * 60, 1440)
-        v_s = timeline.loc[t_s, 'capacity_accum']
-        v_e = timeline.loc[t_e - 1 if t_e == 1440 else t_e, 'capacity_accum']
-        hourly_throughput.append(v_e - v_s)
-
-    # Perfil de capacidad: PAAR durante el GDP, AAR fuera del GDP
-    cap_profile = [
-        params['PAAR'] if int(params['H_START'] / 60) <= h < int(params['H_END'] / 60)
-        else params['AAR']
-        for h in range(24)
-    ]
-
-    hours = range(24)
-    plt.bar(hours, hourly_demand,     color='cornflowerblue', alpha=0.5, width=0.8, edgecolor='black', label='Original Demand (ETA)')
-    plt.bar(hours, hourly_throughput, color='midnightblue',   alpha=0.8, width=0.4, edgecolor='black', label='Actual Traffic Served')
-    plt.step(hours, cap_profile, where='mid', color='hotpink', linewidth=3, label='Capacity Limit')
-
-    plt.title('Impact of LVP Regulation: Demand vs. Actual Flow', fontsize=15, fontweight='bold')
-    plt.xlabel('Time of Day (UTC)', fontsize=12)
-    plt.ylabel('Movements per Hour', fontsize=12)
-    plt.xticks(hours)
-    plt.legend(loc='upper left')
-    plt.grid(True, axis='y', linestyle='--', alpha=0.6)
-    plt.savefig(path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def plot_impacto_economico(df_res: pd.DataFrame, path: str) -> None:
-    """
-    Gráfico 3: Coste total Do-Nothing vs. GDP.
-
-    Visualiza el ahorro económico que genera el GDP al transferir retraso
-    del aire (caro) a tierra (barato). Usa calcular_kpis_economicos()
-    para garantizar coherencia con el Excel.
-    """
-    kpis = calcular_kpis_economicos(df_res)  # Fuente única de verdad
-
-    labels = [
-        'Scenario 1: Do-Nothing\n(All delay airborne)',
-        'Scenario 2: GDP\n(Delay transferred to ground)',
-    ]
-    values = [kpis['cost_baseline'], kpis['cost_gdp']]
-
-    plt.figure(figsize=(10, 6))
-    bars = plt.bar(labels, values, color=['crimson', 'mediumseagreen'], edgecolor='black', width=0.6)
-
-    plt.title("GDP Cost Savings vs. Do-Nothing Scenario", fontsize=14, fontweight='bold')
-    plt.ylabel("Estimated Total Cost (€)", fontsize=12)
-
-    # Margen del 30% para que las etiquetas de valor no queden cortadas
-    max_val = max(values)
-    plt.ylim(0, max_val * 1.30)
-
-    for bar in bars:
-        yval = bar.get_height()
-        plt.text(
-            bar.get_x() + bar.get_width() / 2,
-            yval + (max_val * 0.03),
-            f"€ {int(yval):,}",
-            ha='center', va='bottom', fontweight='bold', fontsize=11,
-        )
-
-    plt.grid(axis='y', linestyle='--', alpha=0.5)
-    plt.savefig(path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def plot_equidad_aerolineas(df_res: pd.DataFrame, path: str) -> None:
-    """
-    Gráfico 4: Equidad del algoritmo RBS por aerolínea (Top 10).
-
-    El RBS debería distribuir el retraso equitativamente entre aerolíneas.
-    Si una aerolínea tiene un retraso medio muy superior a la media global
-    (línea roja), podría indicar un problema de equidad en la asignación.
-    """
-    # Seleccionamos las 10 aerolíneas con más vuelos en el período
-    top_airlines = df_res['airline'].value_counts().head(10).index
-    df_top = df_res[df_res['airline'].isin(top_airlines)]
-
-    equity_stats = (
-        df_top.groupby('airline')['total_delay']
-        .mean()
-        .sort_values(ascending=False)
-    )
-
-    plt.figure(figsize=(12, 6))
-    plt.bar(equity_stats.index, equity_stats.values, color='mediumpurple', edgecolor='black', alpha=0.8)
-
-    # Línea de referencia: retraso medio global sobre todos los vuelos
-    plt.axhline(
-        y=df_res['total_delay'].mean(),
-        color='red', linestyle='--', linewidth=2,
-        label=f"Global Average Delay ({df_res['total_delay'].mean():.1f} min)",
-    )
-
-    plt.title("RBS Equity: Mean delay among top 10 airlines in LEBL", fontsize=14, fontweight='bold')
-    plt.xlabel("Airline Code", fontsize=12)
-    plt.ylabel("Average Delay (minutes)", fontsize=12)
-    plt.legend()
-    plt.grid(axis='y', linestyle='--', alpha=0.6)
-    plt.savefig(path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-
-def generar_graficos(
-    timeline: pd.DataFrame,
-    df_vuelos: pd.DataFrame,
+def exportar_auditoria_excel(
+    df_vuelos_crudo: pd.DataFrame,
     df_res: pd.DataFrame,
-    params: dict,
-    h_noreg: int,
-    paths: dict,
+    df_slots: pd.DataFrame,
+    path: str,
 ) -> None:
     """
-    Orquestador de gráficos: llama a cada función de plot de forma independiente.
-
-    Al tener cada gráfico en su propia función, si uno falla (ej: datos
-    insuficientes para el gráfico de equidad), los demás se siguen generando.
+    Genera el Excel de auditoría con 5 pestañas:
+        1_Datos_Crudos:   Todos los vuelos sin procesar (para trazabilidad).
+        2_Regulacion_GDP: Vuelos con su slot asignado y retraso desglosado.
+        3_Matriz_Slots:   Todos los slots generados y si están ocupados.
+        4_KPIs_Avanzados: Métricas operacionales, económicas y ambientales.
+        5_Equidad_RBS:    Retraso agregado por aerolínea.
 
     Args:
-        paths: Diccionario con las rutas de salida. Debe tener la clave 'cum'
-               (directorio base donde se construyen las demás rutas).
+        df_vuelos_crudo: DataFrame original pre-GDP (para la pestaña de trazabilidad).
+        df_res:          DataFrame con resultados del GDP y retrasos calculados.
+        df_slots:        DataFrame con la matriz de slots generados.
+        path:            Ruta completa del archivo .xlsx a generar.
     """
-    dir_figures = os.path.dirname(paths['cum'])
-    os.makedirs(dir_figures, exist_ok=True)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    # Cada gráfico se genera de forma independiente
-    plot_newell(timeline, params, h_noreg, paths['cum'])
-    plot_balance_capacidad(timeline, df_vuelos, params, paths['bal'])
-    plot_impacto_economico(df_res, os.path.join(dir_figures, '3_impacto_economico.png'))
-    plot_equidad_aerolineas(df_res, os.path.join(dir_figures, '4_equidad_aerolineas.png'))
+    try:
+        with pd.ExcelWriter(path, engine='openpyxl') as writer:
 
-    print("   -> 4 gráficos generados en output/figures/")
+            # --- PESTAÑA 1: Datos sin tocar ---
+            # Permite comparar la entrada con la salida para auditar el proceso.
+            df_vuelos_crudo.to_excel(writer, sheet_name='1_Datos_Crudos', index=False)
+
+            # --- PESTAÑA 2: Regulación GDP ---
+            # Solo las columnas relevantes, renombradas para claridad del receptor.
+            cols_reg = [
+                'ARCID', 'airline', 'ADEP', 'ATYP', 'recat', 'is_ecac',
+                'distancia_km', 'minutes_eta', 'assigned_slot',
+                'total_delay', 'air_delay', 'ground_delay', 'flight_status',
+            ]
+            df_export = (
+                df_res[cols_reg]
+                .copy()
+                .sort_values('minutes_eta')
+                .rename(columns={
+                    'minutes_eta':   'ETA_Prog',
+                    'assigned_slot': 'ATA_Real',
+                })
+            )
+            df_export.to_excel(writer, sheet_name='2_Regulacion_GDP', index=False)
+
+            # --- PESTAÑA 3: Matriz de slots ---
+            df_slots.to_excel(writer, sheet_name='3_Matriz_Slots', index=False)
+
+            # --- PESTAÑA 4: KPIs ---
+            # Usamos calcular_kpis_economicos() — misma fuente que los gráficos.
+            kpis = calcular_kpis_economicos(df_res)
+            candidatos = df_res[df_res['flight_status'] == 'GPD CANDIDATE']
+            exentos    = df_res[df_res['flight_status'] != 'GPD CANDIDATE']
+
+            kpis_df = pd.DataFrame({
+                'Métrica Operacional / Ambiental': [
+                    'Vuelos Regulados (Candidatos GDP)',
+                    'Vuelos Exentos',
+                    'Retraso Medio (min/vuelo)',
+                    'Desviación Estándar Retraso (min)',
+                    'Retraso Máximo (min)',
+                    '--- ECONOMÍA Y MEDIO AMBIENTE ---',
+                    'Coste Total: Escenario Do-Nothing (€)',
+                    'Coste Total: Escenario GDP (€)',
+                    'Ahorro Económico Estimado (€)',
+                    'Emisiones CO2: Escenario Do-Nothing (kg)',
+                    'Emisiones CO2: Escenario GDP (kg)',
+                    'CO2 Ahorrado (kg)',
+                ],
+                'Valor': [
+                    len(candidatos),
+                    len(exentos),
+                    round(df_res['total_delay'].mean(), 2),
+                    round(df_res['total_delay'].std(), 2),
+                    round(df_res['total_delay'].max(), 2),
+                    '',
+                    kpis['cost_baseline'],
+                    kpis['cost_gdp'],
+                    kpis['cost_savings'],
+                    kpis['co2_baseline'],
+                    kpis['co2_gdp'],
+                    kpis['co2_savings'],
+                ],
+            })
+            kpis_df.to_excel(writer, sheet_name='4_KPIs_Avanzados', index=False)
+
+            # --- PESTAÑA 5: Equidad RBS por aerolínea ---
+            eq_df = (
+                df_res.groupby('airline')
+                .agg(
+                    Total_Vuelos=('ARCID', 'count'),
+                    Retraso_Total_min=('total_delay', 'sum'),
+                    Retraso_Medio_min=('total_delay', 'mean'),
+                    Retraso_Maximo_min=('total_delay', 'max'),
+                )
+                .reset_index()
+                .sort_values('Total_Vuelos', ascending=False)
+            )
+            eq_df.to_excel(writer, sheet_name='5_Equidad_RBS', index=False)
+
+        print(f"✅ Excel de auditoría generado en: {path}")
+
+    except PermissionError:
+        # Ocurre cuando el archivo está abierto en Excel — Windows lo bloquea.
+        print("⚠️  ERROR: Cierra el archivo Excel antes de ejecutar el script.")
+
 
 # =============================================================================
 # 8. ORQUESTADOR PRINCIPAL DEL MÓDULO
@@ -551,8 +487,7 @@ def generar_graficos(
 def ejecutar_nucleo_gdp(
     df_vuelos: pd.DataFrame,
     params: dict,
-    output_paths: dict,
-) -> dict:
+    ) -> dict:
     """
     Orquestador de la Fase 2: llama a todas las funciones en el orden correcto.
 
@@ -602,8 +537,6 @@ def ejecutar_nucleo_gdp(
     # PASO 5: Cálculo de retrasos
     df_res = calcular_delays(df_res)
 
-    # PASO 6: Gráficos
-    generar_graficos(timeline, df_vuelos, df_res, params, h_noreg, output_paths)
 
     return {
         'vuelos_asignados': df_res,

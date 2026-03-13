@@ -81,23 +81,30 @@ ECAC_PREFIXES: tuple = tuple([
 ])
 
 # -----------------------------------------------------------------------------
-# CONSTANTES ECONÓMICAS Y AMBIENTALES (Eurocontrol Standard Inputs)
-# Fuente: Eurocontrol "Standard Inputs for Eurocontrol Cost-Benefit Analyses"
+# CONSTANTES ECONÓMICAS
+# Fuente: University of Westminster / Eurocontrol,
+#   "European airline delay cost reference values", v4.1, 2015.
 # -----------------------------------------------------------------------------
 
 # Coste por minuto de retraso en el AIRE: motores encendidos, combustible
-# quemando, tripulación pagada, desgaste de motores. Cifra conservadora.
+# quemando, tripulación pagada, desgaste de motores.
 COST_AIR_MIN: int = 100   # € por minuto en vuelo (holding o ruta)
 
 # Coste por minuto de retraso en TIERRA: motores apagados, solo APU activo.
-# Mucho más barato que en el aire, de ahí la ventaja del GDP.
 COST_GND_MIN: int = 35    # € por minuto en tierra (con GDP aplicado)
 
-# Emisiones de CO2 por minuto en el AIRE (combustión de los motores)
-CO2_AIR_MIN: int = 95     # kg de CO2 por minuto en vuelo
-
-# Emisiones de CO2 por minuto en TIERRA (solo APU: motor auxiliar de cabina)
-CO2_GND_MIN: int = 10     # kg de CO2 por minuto en tierra
+# -----------------------------------------------------------------------------
+# EMISIONES CO2
+# Calculadas por vuelo mediante el modelo analítico de:
+#   Montlaur, A., Trapote-Barreira, C., & Delgado, L. (2025).
+#   Analytical Models of Flight Fuel Consumption and Non-CO2 Emissions
+#   as a Function of Aircraft Capacity.
+#   Applied Sciences, 15(17), 9688.
+#   https://doi.org/10.3390/app15179688
+#
+# Implementado en src/emissions_fuel_model.py
+# Los valores se calculan dinámicamente — NO hay constantes de CO2.
+# -----------------------------------------------------------------------------
 
 
 # -----------------------------------------------------------------------------
