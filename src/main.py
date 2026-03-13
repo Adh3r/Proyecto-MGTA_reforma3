@@ -136,7 +136,8 @@ def ejecutar_proyecto_completo() -> None:
 # Punto de entrada estándar de Python.
 # Este bloque SOLO se ejecuta cuando lanzas el script directamente:
 #   python main.py
-# pito cum cum 
+# pito cum cum
+# estoy super del chill porque he renunciado al azucar
 # NO se ejecuta si otro módulo importa main (ej: import main).
 # =============================================================================
 if __name__ == "__main__":
