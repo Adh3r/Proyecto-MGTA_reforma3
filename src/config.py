@@ -1,77 +1,140 @@
 # =============================================================================
 # src/config.py
-# FUENTE ÚNICA DE VERDAD: Todas las constantes del proyecto viven aquí.
+# FUENTE ÚNICA DE VERDAD — Todas las constantes del proyecto viven aquí.
 #
-# ¿Por qué centralizar las constantes?
-# Si mañana cambia la capacidad del aeropuerto (AAR) o el coste por minuto,
-# solo tienes que tocar ESTE archivo. Sin esto, tendrías que buscar el valor
-# en 3 scripts distintos y arriesgarte a dejar uno sin actualizar.
+# POR QUÉ CENTRALIZAR LAS CONSTANTES:
+#   Sin este archivo, el valor del AAR (por ejemplo) estaría escrito en
+#   lib_gdp_core.py, lib_sensitivity.py y main.py por separado. Si cambia
+#   la capacidad del aeropuerto, habría que buscarlo y cambiarlo en tres sitios,
+#   con riesgo de olvidar alguno.
+#   Con config.py, hay UN solo sitio donde tocar ese valor.
+#
+# CÓMO IMPORTAR LAS CONSTANTES EN OTRO MÓDULO:
+#   from config import CFG, COST_AIR_MIN, ECAC_PREFIXES
 # =============================================================================
 
 from dataclasses import dataclass
 
 
-# -----------------------------------------------------------------------------
-# CONFIGURACIÓN DEL AEROPUERTO Y EL GDP
-# Usamos un dataclass "frozen" (congelado) para que nadie pueda cambiar estos
-# valores por accidente durante la ejecución del programa.
-# -----------------------------------------------------------------------------
+# =============================================================================
+# PARÁMETROS OPERACIONALES DEL GDP EN LEBL (BARCELONA EL PRAT)
+# =============================================================================
+
 @dataclass(frozen=True)
 class AirportConfig:
     """
-    Parámetros operacionales del Ground Delay Program (GDP) en LEBL (Barcelona).
+    Parámetros operacionales del Ground Delay Program simulado en LEBL.
 
-    H_START / H_END: Ventana de regulación en minutos desde medianoche UTC.
-      - 360 minutos = 06:00 UTC
-      - 780 minutos = 13:00 UTC
-    AAR:  Airport Arrival Rate nominal (sin LVP). Ej: 44 llegadas/hora.
-    PAAR: Pre-Departure AAR reducido (con LVP activo). Ej: 20 llegadas/hora.
-    H_FREEZE_OFFSET: Minutos antes del GDP start en los que un vuelo ya
-      despegado se considera "airborne" y queda exento de regulación.
-      150 min = 2.5 horas, margen estándar CTOT de Eurocontrol.
-    GDP_RADIUS_KM: Radio máximo desde el aeropuerto destino para incluir
-      un vuelo en la regulación. Vuelos más lejanos están exentos.
+    QUÉ ES UN DATACLASS FROZEN:
+        Un dataclass es una clase de Python diseñada para almacenar datos.
+        frozen=True significa que sus valores NO se pueden cambiar una vez
+        creada la instancia. Esto evita que alguien modifique por accidente
+        el AAR durante la ejecución del programa.
+        Es el equivalente a las "constantes" de otros lenguajes.
+
+    UNIDADES DE TIEMPO:
+        H_START y H_END se expresan en MINUTOS desde medianoche UTC.
+        Conversión rápida: horas × 60 = minutos
+            06:00 UTC = 6 × 60 = 360 minutos
+            13:00 UTC = 13 × 60 = 780 minutos
+
+    PARÁMETROS:
+        AAR:             Tasa de llegadas nominal (Aircraft Arrival Rate).
+                         Cuántos aviones por hora puede aceptar LEBL en condiciones normales.
+        PAAR:            Tasa de llegadas reducida durante LVP (Low Visibility Procedures).
+                         Cuántos aviones por hora puede aceptar con visibilidad reducida.
+        H_START:         Minuto de inicio del GDP (cuando se activa la restricción LVP).
+        H_END:           Minuto de fin del GDP (cuando se levanta la restricción LVP).
+        H_FREEZE_OFFSET: Ventana de congelación CTOT (minutos antes de H_START).
+                         Si un vuelo despegó más de H_FREEZE_OFFSET minutos antes de H_START,
+                         se considera "airborne" y queda exento — no puede recibir un nuevo CTOT.
+                         Valor estándar Eurocontrol: 150 minutos (2.5 horas).
+        GDP_RADIUS_KM:   Radio máximo de cobertura del GDP en kilómetros.
+                         Vuelos que salen de aeropuertos más lejanos quedan exentos
+                         porque el GDP no llegaría a tiempo para retrasarlos.
     """
-    AAR: int = 44
-    PAAR: int = 20
-    H_START: int = 360          # 06:00 UTC en minutos desde medianoche
-    H_END: int = 780            # 13:00 UTC en minutos desde medianoche
-    H_FREEZE_OFFSET: int = 150  # Ventana de congelación CTOT (minutos)
-    GDP_RADIUS_KM: int = 3000   # Radio de cobertura de la regulación (km)
+    AAR:             int = 44    # Aviones/hora en operación normal
+    PAAR:            int = 20    # Aviones/hora durante LVP (baja visibilidad)
+    H_START:         int = 360   # 06:00 UTC → inicio de la regulación LVP
+    H_END:           int = 780   # 13:00 UTC → fin de la regulación LVP
+    H_FREEZE_OFFSET: int = 150   # 2.5 horas antes de H_START = punto de no retorno
+    GDP_RADIUS_KM:   int = 3000  # Radio de cobertura del GDP (km desde LEBL)
 
-    # Propiedad calculada: tiempo entre slots (minutos/avión) para cada modo
     @property
     def SLOT_NOM(self) -> float:
-        """Intervalo entre slots en operación normal (minutos)."""
+        """
+        Intervalo entre slots consecutivos en operación normal (minutos/avión).
+        Si el aeropuerto acepta 44 aviones/hora → 1 avión cada 60/44 = 1.36 min.
+        """
         return 60 / self.AAR
 
     @property
     def SLOT_RED(self) -> float:
-        """Intervalo entre slots durante LVP / capacidad reducida (minutos)."""
+        """
+        Intervalo entre slots durante LVP / capacidad reducida (minutos/avión).
+        Si el aeropuerto acepta 20 aviones/hora → 1 avión cada 60/20 = 3 min.
+        """
         return 60 / self.PAAR
 
+    def to_params_dict(self) -> dict:
+        """
+        Devuelve el diccionario de parámetros que necesita ejecutar_nucleo_gdp().
 
-# -----------------------------------------------------------------------------
-# VELOCIDADES POR CATEGORÍA DE ESTELA TURBULENTA (RECAT-EU)
-# Se usan para estimar la distancia recorrida en vuelo (cinemática).
-# La categoría D (Heavy) es el valor por defecto cuando no hay datos.
-# -----------------------------------------------------------------------------
+        POR QUÉ EXISTE ESTE MÉTODO:
+            Sin él, cada módulo que necesita el diccionario de parámetros
+            (main.py, los modos debug de cada librería...) tendría que construirlo
+            manualmente repitiendo las mismas 6 líneas. Si se añade un parámetro
+            nuevo al GDP, habría que recordar actualizarlo en todos esos sitios.
+            Con este método, hay un único sitio donde se define qué va en el dict.
+
+        USO:
+            from config import CFG
+            params = CFG.to_params_dict()
+        """
+        return {
+            'H_START':  self.H_START,
+            'H_END':    self.H_END,
+            'AAR':      self.AAR,
+            'PAAR':     self.PAAR,
+            'SLOT_NOM': self.SLOT_NOM,
+            'SLOT_RED': self.SLOT_RED,
+        }
+
+
+# =============================================================================
+# VELOCIDADES DE CRUCERO POR CATEGORÍA DE ESTELA TURBULENTA (RECAT-EU)
+# =============================================================================
+# Se usan para estimar la distancia recorrida por cada vuelo (cinemática básica).
+# La categoría RECAT-EU clasifica los aviones por su masa y envergadura:
+#   A → los más grandes (A380), F → los más pequeños (avionetas).
+# La velocidad de la categoría D es el fallback cuando no hay datos del avión.
+
 VELOCIDAD_KNOTS: dict[str, int] = {
-    'A': 480,   # Super-Heavy (A380)
-    'B': 470,   # Upper-Heavy (B747, A340)
-    'C': 460,   # Lower-Heavy (B767, A330)
-    'D': 440,   # Upper-Medium (B737, A320) — la más común
-    'E': 320,   # Lower-Medium (turbohélices grandes)
-    'F': 150,   # Light (aviones pequeños)
+    'A': 480,   # Super-Heavy: A380
+    'B': 470,   # Upper-Heavy: B747, A340
+    'C': 460,   # Lower-Heavy: B767, A330
+    'D': 440,   # Upper-Medium: B737, A320 — la categoría más común en LEBL
+    'E': 320,   # Lower-Medium: turbohélices grandes
+    'F': 150,   # Light: aviones pequeños y regionales
 }
 
-# -----------------------------------------------------------------------------
-# PREFIJOS OACI DE AEROPUERTOS DENTRO DEL ESPACIO ECAC
-# (European Civil Aviation Conference)
-# Solo los vuelos procedentes de aeropuertos ECAC son candidatos al GDP.
-# Los vuelos intercontinentales quedan exentos porque el GDP no puede
-# ordenarles retrasar el despegue (están fuera de la jurisdicción europea).
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# PREFIJOS OACI DE AEROPUERTOS EN EL ESPACIO AÉREO ECAC
+# =============================================================================
+# ECAC: European Civil Aviation Conference — el espacio aéreo "europeo" del GDP.
+#
+# Los primeros 2 caracteres del código OACI de un aeropuerto identifican
+# la región del mundo donde está. Los prefijos de abajo son los de Europa.
+# Ejemplos:
+#   LEMD (Madrid)   → 'LE' → ECAC ✓
+#   EGLL (Londres)  → 'EG' → ECAC ✓
+#   OMDB (Dubai)    → 'OM' → NO ECAC — vuelo intercontinental, exento del GDP
+#   KJFK (Nueva York) → 'KJ' → NO ECAC — exento del GDP
+#
+# Solo los vuelos que SALEN de aeropuertos ECAC pueden recibir un CTOT.
+# Los vuelos intercontinentales están fuera de la jurisdicción del GDP europeo.
+
 ECAC_PREFIXES: tuple = tuple([
     'EB', 'ED', 'EE', 'EF', 'EG', 'EH', 'EI', 'EK', 'EL', 'EN', 'EP',
     'ES', 'ET', 'EV', 'EY',
@@ -80,36 +143,69 @@ ECAC_PREFIXES: tuple = tuple([
     'BI', 'GC', 'GE', 'UD', 'UG', 'UK', 'UB',
 ])
 
-# -----------------------------------------------------------------------------
+
+# =============================================================================
 # CONSTANTES ECONÓMICAS
+# =============================================================================
 # Fuente: University of Westminster / Eurocontrol,
 #   "European airline delay cost reference values", v4.1, 2015.
-# -----------------------------------------------------------------------------
+#
+# Estos valores representan el coste MEDIO por minuto de retraso para
+# una aerolínea europea típica. Incluyen: combustible, tripulación,
+# desgaste de equipos, compensaciones a pasajeros y costes de handling.
 
-# Coste por minuto de retraso en el AIRE: motores encendidos, combustible
-# quemando, tripulación pagada, desgaste de motores.
-COST_AIR_MIN: int = 100   # € por minuto en vuelo (holding o ruta)
+# Retraso en el AIRE: el avión está volando (motores encendidos, combustible
+# quemando, tripulación trabajando). Es el retraso más caro.
+COST_AIR_MIN: int = 100   # EUR por minuto de retraso en vuelo
 
-# Coste por minuto de retraso en TIERRA: motores apagados, solo APU activo.
-COST_GND_MIN: int = 35    # € por minuto en tierra (con GDP aplicado)
+# Retraso en TIERRA: el avión espera en el aeropuerto de origen antes de
+# despegar (motores apagados, solo APU auxiliar). Mucho más barato.
+# La diferencia entre estos dos valores es la justificación económica del GDP:
+# transferir retraso del aire a tierra ahorra dinero.
+COST_GND_MIN: int = 35    # EUR por minuto de retraso en tierra
 
-# -----------------------------------------------------------------------------
-# EMISIONES CO2
-# Calculadas por vuelo mediante el modelo analítico de:
+
+# =============================================================================
+# MODELO DE EMISIONES CO2
+# =============================================================================
+# Las emisiones NO se calculan con constantes — se calculan por vuelo usando:
 #   Montlaur, A., Trapote-Barreira, C., & Delgado, L. (2025).
-#   Analytical Models of Flight Fuel Consumption and Non-CO2 Emissions
-#   as a Function of Aircraft Capacity.
 #   Applied Sciences, 15(17), 9688.
 #   https://doi.org/10.3390/app15179688
 #
-# Implementado en src/emissions_fuel_model.py
-# Los valores se calculan dinámicamente — NO hay constantes de CO2.
-# -----------------------------------------------------------------------------
+# El modelo necesita la distancia del vuelo y el número de asientos.
+# Está implementado en src/emissions_fuel_model.py
+# Se llama en lib_data_prep.py durante la preparación de datos (Fase 1).
 
 
-# -----------------------------------------------------------------------------
-# INSTANCIA GLOBAL LISTA PARA IMPORTAR
-# En lugar de instanciar AirportConfig() en cada script, la creamos aquí
-# una sola vez. Cualquier módulo puede hacer: from config import CFG
-# -----------------------------------------------------------------------------
+# =============================================================================
+# ETIQUETAS DE FLIGHT_STATUS — FUENTE ÚNICA DE VERDAD PARA LOS FILTROS
+# =============================================================================
+# Estas constantes son los únicos cuatro valores posibles de la columna
+# 'flight_status' que asigna etiquetar_vuelos_gdp().
+#
+# POR QUÉ DEFINIRLAS AQUÍ EN LUGAR DE ESCRIBIR LOS STRINGS DIRECTAMENTE:
+#   En el código hay más de 15 sitios donde se filtra por flight_status.
+#   Si se escribe el string directamente (ej: 'GPD CANDIDATE') en cada sitio,
+#   un typo en cualquiera de ellos (ej: 'GDP CANDIDATE') haría que ese filtro
+#   no encontrara nada y fallara en silencio — sin error, con resultados incorrectos.
+#   Con estas constantes, un typo en el nombre de la constante sí genera
+#   un error inmediato de Python (NameError), que es mucho más fácil de detectar.
+#
+# USO:
+#   from config import FS_CANDIDATE, FS_AIRBORNE, FS_DISTANCE, FS_INTERNATIONAL
+#   candidatos = df[df['flight_status'] == FS_CANDIDATE]
+
+FS_CANDIDATE     = 'GDP CANDIDATE'        # Vuelo regulable por el GDP
+FS_INTERNATIONAL = 'EXEMPT INTERNATIONAL' # Vuelo intercontinental (fuera del ECAC)
+FS_AIRBORNE      = 'EXEMPT AIRBORNE'      # Vuelo ya en el aire cuando arranca el GDP
+FS_DISTANCE      = 'EXEMPT DISTANCE'      # Vuelo demasiado lejos para ser regulado
+
+
+# =============================================================================
+# INSTANCIA GLOBAL — LA QUE IMPORTAN TODOS LOS MÓDULOS
+# =============================================================================
+# Creamos UNA sola instancia de AirportConfig aquí.
+# Todos los módulos importan esta instancia: from config import CFG
+# Esto garantiza que todos usan exactamente los mismos valores.
 CFG = AirportConfig()

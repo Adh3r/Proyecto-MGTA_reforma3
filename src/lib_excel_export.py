@@ -9,8 +9,8 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from config import COST_AIR_MIN, COST_GND_MIN
-from lib_gdp_core import calcular_kpis_economicos, calcular_retraso_minimo_newell
+from config import COST_AIR_MIN, COST_GND_MIN, FS_CANDIDATE, FS_AIRBORNE, FS_INTERNATIONAL, FS_DISTANCE
+from lib_gdp_core import calcular_kpis_economicos
 
 COLOR_CABECERA_AZUL = "FF1F4E79"
 COLOR_CABECERA_GRIS = "FF404040"
@@ -98,12 +98,11 @@ def _congelar_primera_fila(ws):
 # FUNCIONES DE PESTANA
 # =============================================================================
 
-def _sheet_parametros(wb, params, h_noreg, timeline):
+def _sheet_parametros(wb, params, h_noreg, r_min_newell: float):
     """Pestana 0: Parametros del escenario. Incluye retraso minimo de Newell y modelo CO2."""
     def min_a_hhmm(m):
         return f"{int(m)//60:02d}:{int(m)%60:02d} UTC"
-
-    r_min_newell = calcular_retraso_minimo_newell(timeline)
+    
     dur_reg   = params['H_END'] - params['H_START']
     dur_total = h_noreg - params['H_START']
     reduccion = round((1 - params['PAAR'] / params['AAR']) * 100, 1)
@@ -162,13 +161,7 @@ def _sheet_parametros(wb, params, h_noreg, timeline):
     assert len(parametros) == len(valores) == len(fuentes), \
         f"Listas desiguales: Parametro={len(parametros)}, Valor={len(valores)}, Fuente={len(fuentes)}"
 
-    # Reemplazar '--' por el caracter de separador visual
-    parametros = [p.replace('--', '\u2500\u2500') for p in parametros]
-
     df = pd.DataFrame({'Parametro': parametros, 'Valor': valores, 'Fuente / Nota': fuentes})
-
-    # Para que _escribir_dataframe_con_formato detecte los separadores
-    df['Parametro'] = df['Parametro'].str.replace('\u2500\u2500', '--')
 
     ws = wb.create_sheet('0_Parametros_GDP')
     _escribir_dataframe_con_formato(ws, df)
@@ -206,109 +199,70 @@ def _sheet_matriz_slots(wb, df_slots):
 
 def _sheet_kpis_comparativa(wb, df_res):
     kpis = calcular_kpis_economicos(df_res)
-    candidatos = df_res[df_res['flight_status'] == 'GPD CANDIDATE']
-    exentos    = df_res[df_res['flight_status'] != 'GPD CANDIDATE']
-    r_total  = df_res['total_delay'].sum()
-    r_aire   = df_res['air_delay'].sum()
-    r_tierra = df_res['ground_delay'].sum()
+    candidatos = df_res[df_res['flight_status'] == FS_CANDIDATE]
+    exentos    = df_res[df_res['flight_status'] != FS_CANDIDATE]
+    r_total = df_res['total_delay'].sum()
+    r_aire  = df_res['air_delay'].sum()
+    r_tierra= df_res['ground_delay'].sum()
 
     def fmt_min(v): return f"{int(round(v))} min"
     def fmt_eur(v): return f"EUR {int(v):,}"
     def fmt_kg(v):  return f"{int(v):,} kg"
-    def pct(a, b):  return f"{round((a-b)/a*100,1)} %" if a != 0 else "-"
-    def dif(a, b):  return round(a-b, 2)
+    def pct(a,b):   return f"{round((a-b)/a*100,1)} %" if a != 0 else "-"
+    def dif(a,b):   return round(a-b, 2)
 
     metricas = [
         '-- OPERACIONAL --',
-        'Total vuelos en ventana GDP', 'Vuelos candidatos GDP (regulados)', 'Vuelos exentos',
-        'Retraso irrecuperable si GDP cancelado en H_START',
-        'Retraso TOTAL acumulado',
-        'Retraso acumulado en AIRE', 'Retraso acumulado en TIERRA',
-        'Retraso medio por vuelo (total)',
-        'Retraso medio por vuelo (AIRE)', 'Retraso medio por vuelo (TIERRA)',
-        'Retraso maximo (total)',
-        'Retraso maximo (AIRE)', 'Retraso maximo (TIERRA)',
-        'Desviacion estandar (total)',
+        'Total vuelos en ventana GDP','Vuelos candidatos GDP (regulados)','Vuelos exentos',
+        'Retraso TOTAL acumulado','Retraso absorbido en el AIRE','Retraso absorbido en TIERRA',
+        'Retraso medio por vuelo','Retraso maximo','Desviacion estandar',
         '-- ECONOMICO --',
-        'Coste total estimado',
-        'Coste retraso en AIRE', 'Coste retraso en TIERRA', 'Ahorro generado por GDP',
+        'Coste total estimado','Coste retraso en AIRE','Coste retraso en TIERRA','Ahorro generado por GDP',
         '-- AMBIENTAL --',
-        'Emisiones CO2 totales',
-        'CO2 atribuido al retraso en AIRE', 'CO2 atribuido al retraso en TIERRA',
-        'CO2 ahorrado por GDP',
+        'Emisiones CO2 totales','CO2 ahorrado por GDP',
     ]
-    sin_gdp = [
+    sin_reg = [
         '',
-        len(df_res), len(candidatos), len(exentos),
-        fmt_min(kpis['unrecoverable_delay']),
-        fmt_min(r_total), fmt_min(r_total), fmt_min(0),
-        fmt_min(df_res['total_delay'].mean()),
-        fmt_min(df_res['total_delay'].mean()), fmt_min(0),
-        fmt_min(df_res['total_delay'].max()),
-        fmt_min(df_res['total_delay'].max()), fmt_min(0),
-        fmt_min(df_res['total_delay'].std()),
+        len(df_res),len(candidatos),len(exentos),
+        fmt_min(r_total),fmt_min(r_total),fmt_min(0),
+        fmt_min(df_res['total_delay'].mean()),fmt_min(df_res['total_delay'].max()),fmt_min(df_res['total_delay'].std()),
         '',
-        fmt_eur(kpis['cost_baseline']),
-        fmt_eur(r_total * COST_AIR_MIN), fmt_eur(0), '-',
+        fmt_eur(kpis['cost_baseline']),fmt_eur(r_total*COST_AIR_MIN),fmt_eur(0),'-',
         '',
-        fmt_kg(kpis['co2_baseline']),
-        fmt_kg(kpis['co2_baseline'] - kpis['co2_gdp']), fmt_kg(0), '-',
+        fmt_kg(kpis['co2_baseline']),'-',
     ]
     con_gdp = [
         '',
-        len(df_res), len(candidatos), len(exentos),
-        fmt_min(kpis['unrecoverable_delay']),
-        fmt_min(r_total), fmt_min(r_aire), fmt_min(r_tierra),
-        fmt_min(df_res['total_delay'].mean()),
-        fmt_min(df_res['air_delay'].mean()), fmt_min(df_res['ground_delay'].mean()),
-        fmt_min(df_res['total_delay'].max()),
-        fmt_min(df_res['air_delay'].max()), fmt_min(df_res['ground_delay'].max()),
-        fmt_min(df_res['total_delay'].std()),
+        len(df_res),len(candidatos),len(exentos),
+        fmt_min(r_total),fmt_min(r_aire),fmt_min(r_tierra),
+        fmt_min(df_res['total_delay'].mean()),fmt_min(df_res['total_delay'].max()),fmt_min(df_res['total_delay'].std()),
         '',
-        fmt_eur(kpis['cost_gdp']),
-        fmt_eur(r_aire * COST_AIR_MIN), fmt_eur(r_tierra * COST_GND_MIN),
-        fmt_eur(kpis['cost_savings']),
+        fmt_eur(kpis['cost_gdp']),fmt_eur(r_aire*COST_AIR_MIN),fmt_eur(r_tierra*COST_GND_MIN),fmt_eur(kpis['cost_savings']),
         '',
-        fmt_kg(kpis['co2_gdp']),
-        fmt_kg(kpis['co2_aire_delay']), fmt_kg(kpis['co2_tierra_delay']),
-        fmt_kg(kpis['co2_savings']),
+        fmt_kg(kpis['co2_gdp']),fmt_kg(kpis['co2_savings']),
     ]
     delta = [
-        '', '-', '-', '-',
-        '-',
-        '-', fmt_min(dif(r_total, r_aire)), fmt_min(dif(0, r_tierra)),
-        '-', '-', '-',
-        '-', '-', '-',
-        '-',
+        '','','-','-','-',
+        fmt_min(dif(r_total,r_aire)),fmt_min(dif(0,r_tierra)),
+        '-','-','-',
         '',
-        fmt_eur(dif(kpis['cost_baseline'], kpis['cost_gdp'])),
-        fmt_eur(dif(r_total * COST_AIR_MIN, r_aire * COST_AIR_MIN)),
-        fmt_eur(dif(0, r_tierra * COST_GND_MIN)), '-',
+        fmt_eur(dif(kpis['cost_baseline'],kpis['cost_gdp'])),
+        fmt_eur(dif(r_total*COST_AIR_MIN,r_aire*COST_AIR_MIN)),
+        fmt_eur(dif(0,r_tierra*COST_GND_MIN)),'-',
         '',
-        fmt_kg(dif(kpis['co2_baseline'], kpis['co2_gdp'])),
-        '-', '-', '-',
+        fmt_kg(dif(kpis['co2_baseline'],kpis['co2_gdp'])),'-',
     ]
     mejora = [
-        '', '-', '-', '-',
-        '-',
-        '-', pct(r_total, r_aire), '-',
-        '-', '-', '-',
-        '-', '-', '-',
-        '-',
+        '','','-','-','-',
+        pct(r_total,r_aire),'-','-','-','-',
         '',
-        pct(kpis['cost_baseline'], kpis['cost_gdp']),
-        pct(r_total * COST_AIR_MIN, r_aire * COST_AIR_MIN), '-', '-',
+        pct(kpis['cost_baseline'],kpis['cost_gdp']),
+        pct(r_total*COST_AIR_MIN,r_aire*COST_AIR_MIN),
+        '-','-',
         '',
-        pct(kpis['co2_baseline'], kpis['co2_gdp']),
-        '-', '-', '-',
+        pct(kpis['co2_baseline'],kpis['co2_gdp']),'-',
     ]
-    df = pd.DataFrame({
-        'Metrica':          metricas,
-        'Sin GDP (FIFO)':   sin_gdp,
-        'Con GDP (RBS)':    con_gdp,
-        'Delta Diferencia': delta,
-        'Mejora GDP (%)':   mejora,
-    })
+    df = pd.DataFrame({'Metrica':metricas,'Sin Regulacion':sin_reg,'Con GDP':con_gdp,'Delta Diferencia':delta,'Mejora GDP (%)':mejora})
     ws = wb.create_sheet('5_KPIs_Comparativa')
     _escribir_dataframe_con_formato(ws, df)
     _autoajustar_columnas(ws); _congelar_primera_fila(ws)
@@ -316,108 +270,61 @@ def _sheet_kpis_comparativa(wb, df_res):
 
 
 def _sheet_analisis_retrasos(wb, df_res, df_slots):
-    delay   = df_res['total_delay']
-    aire    = df_res['air_delay']
-    tierra  = df_res['ground_delay']
-    candidatos = df_res[df_res['flight_status'] == 'GPD CANDIDATE']
-    exentos    = df_res[df_res['flight_status'] != 'GPD CANDIDATE']
+    delay      = df_res['total_delay']
+    candidatos = df_res[df_res['flight_status'] == FS_CANDIDATE]
+    exentos    = df_res[df_res['flight_status'] != FS_CANDIDATE]
     retrasados = df_res[df_res['total_delay'] > 0]
     total      = len(df_res)
 
     def pct(n):       return f"{round(n/total*100,1)} %"
     def fmt_min(v):   return f"{int(round(v))} min"
-    def dash(s, col): return fmt_min(s[col].mean()) if len(s) > 0 else '-'
+    def mean_safe(s): return fmt_min(s['total_delay'].mean()) if len(s) > 0 else '-'
     def grp(status):  return df_res[df_res['flight_status'] == status]
 
     n0 = int((delay==0).sum())
-    n1 = int(((delay>0)  & (delay<=15)).sum())
-    n2 = int(((delay>15) & (delay<=30)).sum())
-    n3 = int(((delay>30) & (delay<=60)).sum())
+    n1 = int(((delay>0)&(delay<=15)).sum())
+    n2 = int(((delay>15)&(delay<=30)).sum())
+    n3 = int(((delay>30)&(delay<=60)).sum())
     n4 = int((delay>60).sum())
 
     metricas = [
         '-- ESTADISTICAS DESCRIPTIVAS --',
-        'Total vuelos en ventana GDP', 'Vuelos SIN retraso', 'Vuelos CON retraso',
-        'Retraso minimo (entre retrasados)',
-        'Retraso medio', 'Retraso medio (solo retrasados)',
-        'Mediana', 'Percentil 75', 'Percentil 90',
-        'Retraso maximo', 'Desviacion estandar',
+        'Total vuelos en ventana GDP','Vuelos SIN retraso','Vuelos CON retraso',
+        'Retraso minimo (entre retrasados)','Retraso medio - todos los vuelos',
+        'Retraso medio - solo vuelos retrasados','Mediana del retraso',
+        'Percentil 75 del retraso','Percentil 90 del retraso','Retraso maximo','Desviacion estandar',
         '-- DISTRIBUCION POR BANDAS CODA / EUROCONTROL --',
-        'Banda 0 - Sin retraso',        'Banda 1 - Leve [0-15 min]',
-        'Banda 2 - Moderado [15-30 min]','Banda 3 - Significativo [30-60 min]',
-        'Banda 4 - Severo [>60 min]',
+        'Banda 0 - Sin retraso','Banda 1 - Leve [0-15 min]','Banda 2 - Moderado [15-30 min]',
+        'Banda 3 - Significativo [30-60 min]','Banda 4 - Severo [>60 min]',
         '-- POR TIPO DE VUELO --',
-        'Retraso medio - Candidatos GDP (tierra)',
-        'Retraso medio - Vuelos Exentos (aire)',
-        'Retraso medio - Exentos Internacionales',
-        'Retraso medio - Exentos Airborne',
+        'Retraso medio - Candidatos GDP (tierra)','Retraso medio - Vuelos Exentos (aire)',
+        'Retraso medio - Exentos Internacionales','Retraso medio - Exentos Airborne',
         'Retraso medio - Exentos por Distancia',
         '-- EFICIENCIA DE SLOTS --',
-        'Slots generados', 'Slots ocupados', 'Slots sin asignar',
-        'Tasa de ocupacion', 'Vuelos sin slot asignado',
+        'Slots generados','Slots ocupados','Slots sin asignar','Tasa de ocupacion',
+        'Vuelos sin slot asignado',
     ]
-
-    # helper: min de columna solo entre retrasados
-    ret_aire   = df_res[df_res['air_delay']    > 0]
-    ret_tierra = df_res[df_res['ground_delay'] > 0]
-
-    col_total = [
+    valores = [
         '',
-        total, f"{n0} ({pct(n0)})", f"{len(retrasados)} ({pct(len(retrasados))})",
-        fmt_min(retrasados['total_delay'].min()) if len(retrasados) > 0 else '-',
-        fmt_min(delay.mean()), fmt_min(retrasados['total_delay'].mean()) if len(retrasados) > 0 else '-',
+        total, f"{n0}  ({pct(n0)})", f"{len(retrasados)}  ({pct(len(retrasados))})",
+        fmt_min(retrasados['total_delay'].min()) if len(retrasados)>0 else '-',
+        fmt_min(delay.mean()),
+        fmt_min(retrasados['total_delay'].mean()) if len(retrasados)>0 else '-',
         fmt_min(delay.median()), fmt_min(delay.quantile(0.75)), fmt_min(delay.quantile(0.90)),
         fmt_min(delay.max()), fmt_min(delay.std()),
         '',
-        f"{n0} ({pct(n0)})", f"{n1} ({pct(n1)})", f"{n2} ({pct(n2)})",
-        f"{n3} ({pct(n3)})", f"{n4} ({pct(n4)})",
+        f"{n0} vuelos ({pct(n0)})", f"{n1} vuelos ({pct(n1)})", f"{n2} vuelos ({pct(n2)})",
+        f"{n3} vuelos ({pct(n3)})", f"{n4} vuelos ({pct(n4)})",
         '',
-        dash(candidatos, 'total_delay'), dash(exentos, 'total_delay'),
-        dash(grp('EXEMPT INTERNATIONAL'), 'total_delay'),
-        dash(grp('EXEMPT AIRBORNE'),      'total_delay'),
-        dash(grp('EXEMPT DISTANCE'),      'total_delay'),
+        mean_safe(candidatos), mean_safe(exentos),
+        mean_safe(grp(FS_INTERNATIONAL)), mean_safe(grp(FS_AIRBORNE)),
+        mean_safe(grp(FS_DISTANCE)),
         '',
         len(df_slots), int(df_slots['occupied'].sum()), int((~df_slots['occupied']).sum()),
-        f"{round(df_slots['occupied'].sum()/len(df_slots)*100,1)} %" if len(df_slots) > 0 else '-',
+        f"{round(df_slots['occupied'].sum()/len(df_slots)*100,1)} %" if len(df_slots)>0 else '-',
         int(df_res['assigned_slot'].isna().sum()),
     ]
-    col_aire = [
-        '',
-        '-', '-', '-',
-        fmt_min(ret_aire['air_delay'].min()) if len(ret_aire) > 0 else '-',
-        fmt_min(aire.mean()), fmt_min(ret_aire['air_delay'].mean()) if len(ret_aire) > 0 else '-',
-        fmt_min(aire.median()), fmt_min(aire.quantile(0.75)), fmt_min(aire.quantile(0.90)),
-        fmt_min(aire.max()), fmt_min(aire.std()),
-        '', '-', '-', '-', '-', '-',
-        '',
-        dash(candidatos, 'air_delay'), dash(exentos, 'air_delay'),
-        dash(grp('EXEMPT INTERNATIONAL'), 'air_delay'),
-        dash(grp('EXEMPT AIRBORNE'),      'air_delay'),
-        dash(grp('EXEMPT DISTANCE'),      'air_delay'),
-        '', '-', '-', '-', '-', '-',
-    ]
-    col_tierra = [
-        '',
-        '-', '-', '-',
-        fmt_min(ret_tierra['ground_delay'].min()) if len(ret_tierra) > 0 else '-',
-        fmt_min(tierra.mean()), fmt_min(ret_tierra['ground_delay'].mean()) if len(ret_tierra) > 0 else '-',
-        fmt_min(tierra.median()), fmt_min(tierra.quantile(0.75)), fmt_min(tierra.quantile(0.90)),
-        fmt_min(tierra.max()), fmt_min(tierra.std()),
-        '', '-', '-', '-', '-', '-',
-        '',
-        dash(candidatos, 'ground_delay'), dash(exentos, 'ground_delay'),
-        dash(grp('EXEMPT INTERNATIONAL'), 'ground_delay'),
-        dash(grp('EXEMPT AIRBORNE'),      'ground_delay'),
-        dash(grp('EXEMPT DISTANCE'),      'ground_delay'),
-        '', '-', '-', '-', '-', '-',
-    ]
-
-    df = pd.DataFrame({
-        'Metrica':       metricas,
-        'Total':         col_total,
-        'Retraso Aire':  col_aire,
-        'Retraso Tierra':col_tierra,
-    })
+    df = pd.DataFrame({'Metrica': metricas, 'Valor': valores})
     ws = wb.create_sheet('6_Analisis_Retrasos')
     _escribir_dataframe_con_formato(ws, df)
     _autoajustar_columnas(ws); _congelar_primera_fila(ws)
@@ -453,7 +360,7 @@ def exportar_auditoria_excel(
     df_slots: pd.DataFrame,
     params: dict,
     h_noreg: int,
-    timeline,
+    r_min_newell: float,
     path: str,
 ) -> None:
     """
@@ -465,8 +372,6 @@ def exportar_auditoria_excel(
         df_slots:        Matriz de slots generados.
         params:          Parametros del escenario (AAR, PAAR, H_START...).
         h_noreg:         Minuto del dia en que la cola se disuelve.
-        timeline:        DataFrame con curvas acumuladas de Newell
-                         (columnas demand_accum, capacity_accum).
         path:            Ruta completa del .xlsx de salida.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -478,7 +383,7 @@ def exportar_auditoria_excel(
         if '_tmp' in wb.sheetnames:
             del wb['_tmp']
 
-        _sheet_parametros(wb, params, h_noreg, timeline)
+        _sheet_parametros(wb, params, h_noreg, r_min_newell)
         _sheet_datos_crudos(wb, df_vuelos_crudo)
         _sheet_regulacion_gdp(wb, df_res)
         _sheet_matriz_slots(wb, df_slots)
