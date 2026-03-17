@@ -15,6 +15,9 @@ numpy>=1.24.0
 # Generación de gráficos (diagramas de Newell, balance de capacidad, etc.)
 matplotlib>=3.7.0
 
+# Heatmaps del análisis de sensibilidad (construido sobre matplotlib)
+seaborn>=0.12.0
+
 # Exportación de archivos Excel con múltiples pestañas (.xlsx)
 openpyxl>=3.1.0
 
