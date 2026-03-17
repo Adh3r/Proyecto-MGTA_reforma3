@@ -1,36 +1,27 @@
 # =============================================================================
 # src/config.py
-# FUENTE ÚNICA DE VERDAD — Todas las constantes del proyecto viven aquí.
+#Todas las constantes del proyecto
 #
-# POR QUÉ CENTRALIZAR LAS CONSTANTES:
-#   Sin este archivo, el valor del AAR (por ejemplo) estaría escrito en
-#   lib_gdp_core.py, lib_sensitivity.py y main.py por separado. Si cambia
-#   la capacidad del aeropuerto, habría que buscarlo y cambiarlo en tres sitios,
-#   con riesgo de olvidar alguno.
-#   Con config.py, hay UN solo sitio donde tocar ese valor.
-#
-# CÓMO IMPORTAR LAS CONSTANTES EN OTRO MÓDULO:
+# IMPORTAR LAS CONSTANTES EN OTRO ARCHIVO:
 #   from config import CFG, COST_AIR_MIN, ECAC_PREFIXES
 # =============================================================================
 
 from dataclasses import dataclass
 
-
 # =============================================================================
-# PARÁMETROS OPERACIONALES DEL GDP EN LEBL (BARCELONA EL PRAT)
+# PARÁMETROS  DEL GDP EN LEBL (BARCELONA EL PRAT)
 # =============================================================================
 
 @dataclass(frozen=True)
 class AirportConfig:
     """
-    Parámetros operacionales del Ground Delay Program simulado en LEBL.
+    Parámetros del Ground Delay Program simulado en LEBL.
 
-    QUÉ ES UN DATACLASS FROZEN:
-        Un dataclass es una clase de Python diseñada para almacenar datos.
+    DATACLASS FROZEN:
+        Un dataclass es una clase para almacenar datos.
         frozen=True significa que sus valores NO se pueden cambiar una vez
-        creada la instancia. Esto evita que alguien modifique por accidente
+        creada. Esto evita modificar por accidente
         el AAR durante la ejecución del programa.
-        Es el equivalente a las "constantes" de otros lenguajes.
 
     UNIDADES DE TIEMPO:
         H_START y H_END se expresan en MINUTOS desde medianoche UTC.
@@ -78,11 +69,10 @@ class AirportConfig:
 
     def to_params_dict(self) -> dict:
         """
-        Devuelve el diccionario de parámetros que necesita ejecutar_nucleo_gdp().
+        Devuelve parámetros que necesita ejecutar_nucleo_gdp().
 
         POR QUÉ EXISTE ESTE MÉTODO:
-            Sin él, cada módulo que necesita el diccionario de parámetros
-            (main.py, los modos debug de cada librería...) tendría que construirlo
+            Sin él, cada módulo que necesita parámetros tendría que construirlo
             manualmente repitiendo las mismas 6 líneas. Si se añade un parámetro
             nuevo al GDP, habría que recordar actualizarlo en todos esos sitios.
             Con este método, hay un único sitio donde se define qué va en el dict.
@@ -102,12 +92,12 @@ class AirportConfig:
 
 
 # =============================================================================
-# VELOCIDADES DE CRUCERO POR CATEGORÍA DE ESTELA TURBULENTA (RECAT-EU)
+# VELOCIDADES DE CRUCERO POR CATEGORÍA (RECAT-EU)
 # =============================================================================
-# Se usan para estimar la distancia recorrida por cada vuelo (cinemática básica).
+# Se usan para estimar la distancia recorrida por cada vuelo.
 # La categoría RECAT-EU clasifica los aviones por su masa y envergadura:
 #   A → los más grandes (A380), F → los más pequeños (avionetas).
-# La velocidad de la categoría D es el fallback cuando no hay datos del avión.
+# La velocidad de la categoría D es el predeterminado cuando no hay datos del avión.
 
 VELOCIDAD_KNOTS: dict[str, int] = {
     'A': 480,   # Super-Heavy: A380
@@ -126,11 +116,6 @@ VELOCIDAD_KNOTS: dict[str, int] = {
 #
 # Los primeros 2 caracteres del código OACI de un aeropuerto identifican
 # la región del mundo donde está. Los prefijos de abajo son los de Europa.
-# Ejemplos:
-#   LEMD (Madrid)   → 'LE' → ECAC ✓
-#   EGLL (Londres)  → 'EG' → ECAC ✓
-#   OMDB (Dubai)    → 'OM' → NO ECAC — vuelo intercontinental, exento del GDP
-#   KJFK (Nueva York) → 'KJ' → NO ECAC — exento del GDP
 #
 # Solo los vuelos que SALEN de aeropuertos ECAC pueden recibir un CTOT.
 # Los vuelos intercontinentales están fuera de la jurisdicción del GDP europeo.

@@ -8,13 +8,13 @@
 # FLUJO COMPLETO (en orden de ejecución dentro de preparar_vuelos):
 #   Paso 1 → Leer los dos CSVs (vuelos del día + catálogo de flota)
 #   Paso 2 → Filtrar solo vuelos que aterrizan en LEBL
-#   Paso 3 → Unir con el catálogo de flota (categoría de estela + nº asientos)
+#   Paso 3 → Unir con el catálogo de flota (categoría + nº asientos)
 #   Paso 4 → Convertir tiempos "HH:MM" a minutos desde medianoche
 #   Paso 5 → Marcar si el vuelo viene de Europa (ECAC) y extraer código aerolínea
-#   Paso 6 → Calcular la distancia recorrida en vuelo (cinemática)
-#   Paso 7 → Calcular las emisiones CO2 de cada vuelo (modelo Delgado et al.)
+#   Paso 6 → Calcular la distancia recorrida en vuelo 
+#   Paso 7 → Calcular las emisiones CO2 de cada vuelo 
 #
-# SEPARACIÓN DE RESPONSABILIDADES:
+# SEPARACIÓN:
 #   Este módulo SOLO prepara datos. No ejecuta el GDP, no genera gráficos,
 #   no exporta Excel. Solo entrega una tabla limpia.
 # =============================================================================
@@ -25,11 +25,11 @@ import pandas as pd
 
 # Importamos las constantes desde config.py — si cambia una velocidad o un
 # prefijo ECAC, solo hay que tocar config.py, no este archivo.
-from config import CFG, ECAC_PREFIXES, VELOCIDAD_KNOTS
+from config import ECAC_PREFIXES, VELOCIDAD_KNOTS
 
 
 # =============================================================================
-# FUNCIÓN AUXILIAR: CONVERTIR TIEMPOS A MINUTOS
+# FUNCIÓN AUXILIAR: CONVERTIR TIEMPO A MINUTOS
 # =============================================================================
 
 def parse_time_to_minutes(time_str: str) -> float:
@@ -37,16 +37,10 @@ def parse_time_to_minutes(time_str: str) -> float:
     Convierte un string de tiempo en minutos decimales desde medianoche.
 
     POR QUÉ CONVERTIR A MINUTOS:
-        El GDP trabaja con aritmética de tiempos: "¿cuántos minutos de retraso?",
-        "¿qué vuelo llega antes?". Es mucho más sencillo hacer estas operaciones
-        con números (ej: 390.5) que con strings (ej: "06:30:30").
+        "¿Cuántos minutos de retraso?",
+        "¿Qué vuelo llega antes?". Es mucho más sencillo hacer estas operaciones
+        con números que con strings.
         La medianoche (00:00) = minuto 0. Las 06:00 = minuto 360. Las 23:59 = minuto 1439.
-
-    FORMATOS QUE ACEPTA:
-        "06:30"       → 390.0   (horas:minutos)
-        "06:30:45"    → 390.75  (horas:minutos:segundos)
-        "12"          → 12.0    (solo minutos, como en la columna TT de taxi time)
-        NaN / vacío   → 0.0     (valor nulo, se trata como 0)
 
     Args:
         time_str: El string de tiempo a convertir (puede venir del CSV como NaN).
@@ -93,13 +87,13 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     Pipeline completo de preparación de datos: desde los CSVs crudos hasta
     una tabla lista para el motor GDP.
 
-    QUÉ ES UN PIPELINE DE DATOS:
+    PIPELINE DE DATOS:
         Una secuencia de pasos donde cada uno transforma la tabla y la pasa
         al siguiente. Al final de todos los pasos, la tabla está "enriquecida"
         con toda la información que el GDP necesita.
 
     QUÉ DEVUELVE:
-        Una tabla (DataFrame) con una fila por vuelo, ordenada por ETA,
+        Una tabla con una fila por vuelo, ordenada por ETA,
         con columnas como: distancia_km, is_ecac, co2_kg_vuelo...
 
     Args:
@@ -138,7 +132,7 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # PASO 3: UNIR CON EL CATÁLOGO DE FLOTA
     # =========================================================================
     # El catálogo de flota nos da dos datos por tipo de avión (ATYP):
-    #   - recat:          categoría de estela turbulenta (A, B, C, D, E, F)
+    #   - recat:          categoría (A, B, C, D, E, F)
     #                     usada para calcular la velocidad de crucero
     #   - size_seats_avg: número medio de asientos
     #                     usado para calcular las emisiones CO2
@@ -174,26 +168,24 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # PASO 5: MARCAR ORIGEN ECAC Y EXTRAER CÓDIGO DE AEROLÍNEA
     # =========================================================================
     # is_ecac: ¿El aeropuerto de origen está en el espacio aéreo europeo (ECAC)?
-    #   - True  → el vuelo PUEDE recibir una restricción GDP (está bajo jurisdicción ECAC)
+    #   - True  → el vuelo PUEDE recibir una restricción GDP (está bajo el rango ECAC)
     #   - False → vuelo intercontinental, exento de regulación GDP
     #
     # Los prefijos ECAC son los primeros 2 caracteres del código OACI del aeropuerto.
-    # Ej: LEMD (Madrid) empieza por 'LE' → es ECAC. OMDB (Dubai) empieza por 'OM' → no es ECAC.
     #
     # .str.startswith(tupla) comprueba si el string empieza por alguno de los prefijos
     # de la tupla. Es más eficiente que un bucle for sobre todos los prefijos.
     df_vuelos['is_ecac'] = df_vuelos['ADEP'].astype(str).str.startswith(ECAC_PREFIXES)
 
     # airline: Los 3 primeros caracteres del indicativo de vuelo = código ICAO aerolínea.
-    # Ej: "IBE123" → "IBE" = Iberia. "BAW456" → "BAW" = British Airways.
     df_vuelos['airline'] = df_vuelos['ARCID'].str[:3]
 
     # =========================================================================
-    # PASO 6: CALCULAR LA DISTANCIA RECORRIDA EN VUELO (CINEMÁTICA)
+    # PASO 6: CALCULAR LA DISTANCIA RECORRIDA EN VUELO 
     # =========================================================================
     # Necesitamos la distancia de cada vuelo para:
     #   a) Saber si está dentro del radio de cobertura del GDP.
-    #   b) Calcular las emisiones CO2 (el modelo Delgado necesita la distancia).
+    #   b) Calcular las emisiones CO2.
     #
     # FÓRMULA:
     #   distancia_km = tiempo_en_aire (horas) × velocidad_crucero (kt) × 1.852 (km/kt)
@@ -219,7 +211,7 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # Tiempo real en el aire en horas (sin taxi ni margen de maniobra)
     tiempo_en_aire_horas = (duracion_total_min - df_vuelos['minutes_tt'] - 5.5) / 60.0
 
-    # Velocidad de crucero según categoría de estela (kt).
+    # Velocidad de crucero según categoría (kt).
     # .map(diccionario) sustituye cada valor de la columna por su valor en el diccionario.
     # .fillna(440) asigna 440 kt si la categoría no está en el diccionario.
     velocidad_crucero_kt = df_vuelos['recat'].map(VELOCIDAD_KNOTS).fillna(440)
