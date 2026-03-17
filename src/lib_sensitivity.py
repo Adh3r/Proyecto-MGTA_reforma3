@@ -117,8 +117,11 @@ def _simular_gdp_ligero(
     # Retraso irrecuperable: retraso total de los vuelos que ya estaban en el aire
     # cuando se activó el GDP. Si el GDP se cancela, este retraso no se puede evitar.
     retraso_irrecuperable = float(
-        df_resultado[df_resultado['flight_status'] == FS_AIRBORNE]['total_delay'].sum()
-    )
+    df_resultado[
+        (df_resultado['flight_status'] == FS_AIRBORNE) &
+        (df_resultado['distancia_km'] <= radius_km)
+    ]['total_delay'].sum()
+)
 
     # Devolvemos solo los KPIs que necesitamos para los heatmaps
     # (no toda la tabla de vuelos, para ahorrar memoria en las 42 ejecuciones)
@@ -255,6 +258,7 @@ def ejecutar_analisis_sensibilidad(
             ruta_png,
             int(indice_optimo[0]),  # Fila del óptimo (índice de HFile)
             int(indice_optimo[1]),  # Columna del óptimo (índice de R)
+            # _r invierte la paleta: rojo=alto (malo), verde=bajo (bueno)
         )
 
     # -------------------------------------------------------------------------

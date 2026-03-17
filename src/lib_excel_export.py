@@ -360,6 +360,7 @@ def exportar_auditoria_excel(
     df_slots: pd.DataFrame,
     params: dict,
     h_noreg: int,
+    timeline: pd.DataFrame,
     r_min_newell: float,
     path: str,
 ) -> None:
@@ -372,6 +373,8 @@ def exportar_auditoria_excel(
         df_slots:        Matriz de slots generados.
         params:          Parametros del escenario (AAR, PAAR, H_START...).
         h_noreg:         Minuto del dia en que la cola se disuelve.
+        timeline:        Curvas de Newell minuto a minuto (para graficos).
+        r_min_newell:    Retraso minimo teorico calculado.
         path:            Ruta completa del .xlsx de salida.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
