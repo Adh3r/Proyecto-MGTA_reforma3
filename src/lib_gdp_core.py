@@ -207,7 +207,7 @@ def etiquetar_vuelos_gdp(
 
     # El "punto de no retorno": vuelos que despegaron antes de este minuto
     # ya no pueden recibir un nuevo CTOT (hora de salida asignada).
-    minuto_congelacion = h_start - h_freeze_offset
+    minuto_congelacion = h_start + h_freeze_offset
 
     # --- Tres banderas (True/False) por vuelo ---
 
