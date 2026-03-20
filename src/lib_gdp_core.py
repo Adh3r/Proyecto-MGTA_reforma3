@@ -47,14 +47,6 @@ def simular_curvas_newell(
     Construye las curvas acumuladas de demanda y capacidad del aeropuerto
     para todo el día (1440 minutos), siguiendo el Modelo de Newell.
 
-    QUÉ ES EL MODELO DE NEWELL:
-        Imagina dos contadores que van subiendo con el tiempo:
-        - "Demanda acumulada":  cuántos vuelos han querido aterrizar hasta ahora.
-        - "Capacidad acumulada": cuántos vuelos ha podido aceptar el aeropuerto.
-        Mientras el aeropuerto tiene capacidad, ambas curvas van juntas.
-        Cuando hay LVP (baja visibilidad), la capacidad sube más despacio
-        que la demanda → se crea una brecha → esa brecha ES la cola de aviones.
-
     QUÉ CALCULA ESTA FUNCIÓN:
         - Minuto a minuto, cuántos vuelos hay en cola.
         - H_NOREG: el minuto en que la cola desaparece (aeropuerto recuperado).
