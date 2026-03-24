@@ -160,7 +160,7 @@ def etiquetar_vuelos_gdp(
     df_vuelos: pd.DataFrame,
     h_start: int,
     radius_km: int  = CFG.GDP_RADIUS_KM,
-    h_freeze_offset: int = CFG.H_FREEZE_OFFSET,
+    h_freeze_offset: int = CFG.H_FILE_OFFSET,
 ) -> pd.DataFrame:
     """
     Clasifica cada vuelo en una de estas cuatro categorías de regulación:
@@ -197,12 +197,12 @@ def etiquetar_vuelos_gdp(
 
     # vuelos que despegaron antes de este minuto
     # ya no pueden recibir un nuevo CTOT (hora de salida asignada).
-    minuto_congelacion = h_start + h_freeze_offset
+    t_file = h_start - h_freeze_offset
 
     # --- Tres checks (True/False) por vuelo ---
 
     # Despegó antes del hfile?
-    df['is_departed'] = df['minutes_etd'] < minuto_congelacion
+    df['is_departed'] = df['minutes_etd'] < t_file
 
     # Su aeropuerto de origen está dentro del radio de cobertura del GDP?
     df['is_inside_radius'] = df['distancia_km'] <= radius_km
@@ -470,10 +470,39 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     co2_extra_aire   = (co2_base_vuelo * (df_res['air_delay']   / duracion_vuelo)).sum()
     co2_extra_tierra = (co2_base_vuelo * (df_res['ground_delay'] / duracion_vuelo)).sum()
 
-    # --- Retraso irrecuperable ---
-    retraso_irrecuperable = df_res[
-        df_res['flight_status'] == FS_AIRBORNE
-    ]['total_delay'].sum()
+    # --- Retraso Irrecuperable (Unrecoverable Delay) ---
+    # Asumimos que la previsión meteorológica falla y el GDP se cancela 
+    # exactamente en H_START. ¿Cuánto tiempo han perdido ya los aviones en tierra?
+    
+    # CTD (Calculated Take-Off Time) = Hora real a la que van a despegar con el retraso
+    # Como ground_delay es el retraso asignado en tierra, CTD = ETD + ground_delay
+    ctd = df_res['minutes_etd'] + df_res['ground_delay']
+    h_start = CFG.H_START # El momento de la cancelación
+    
+    # Inicializamos una serie de ceros
+    unrecoverable = pd.Series(0.0, index=df_res.index)
+    
+    # CASO 1: ETD >= H_start
+    # El avión no iba a despegar hasta después de la cancelación de todas formas.
+    # Pierde 0 minutos (el retraso es 100% recuperable).
+    # No hacemos nada porque ya está inicializado a 0.
+    
+    # CASO 2: CTD <= H_start
+    # El avión ya se tragó todo su retraso en tierra y despegó ANTES de que
+    # se cancelara el GDP. Todo su ground_delay es irrecuperable.
+    caso2 = ctd <= h_start
+    unrecoverable[caso2] = df_res.loc[caso2, 'ground_delay']
+    
+    # CASO 3: ETD < H_start < CTD
+    # El avión debía haber despegado, pero el GDP lo retuvo. En el momento
+    # H_start se cancela el GDP y le decimos "¡despega ya!".
+    # El tiempo que ha perdido tontamente es (H_start - ETD).
+    caso3 = (df_res['minutes_etd'] < h_start) & (ctd > h_start)
+    unrecoverable[caso3] = h_start - df_res.loc[caso3, 'minutes_etd']
+    
+    # A esto le sumamos el air_delay de los vuelos AIRBORNE, que por definición 
+    # no se puede recuperar porque ya están en el aire.
+    retraso_irrecuperable = unrecoverable.sum()
 
     return {
         # Costes
@@ -499,7 +528,7 @@ def ejecutar_nucleo_gdp(
     df_vuelos: pd.DataFrame,
     params: dict,
     radius_km: int       = CFG.GDP_RADIUS_KM,
-    h_freeze_offset: int = CFG.H_FREEZE_OFFSET,
+    h_file_offset: int = CFG.H_FILE_OFFSET,
 ) -> dict:
     """
     Orquestador de la Fase 2: ejecuta los 5 pasos del GDP en orden.
@@ -536,7 +565,7 @@ def ejecutar_nucleo_gdp(
         df_vuelos,
         h_start=params['H_START'],
         radius_km=radius_km,
-        h_freeze_offset=h_freeze_offset,
+        h_freeze_offset=h_file_offset,
     )
 
     # PASO 3: Generar la rejilla de slots disponibles

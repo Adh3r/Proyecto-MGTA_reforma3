@@ -48,7 +48,7 @@ class AirportConfig:
     PAAR:            int = 20    # Aviones/hora durante LVP (baja visibilidad)
     H_START:         int = 360   # 06:00 UTC → inicio de la regulación LVP
     H_END:           int = 780   # 13:00 UTC → fin de la regulación LVP
-    H_FREEZE_OFFSET: int = 150   # 2.5 horas antes de H_START = punto de no retorno
+    H_FILE_OFFSET: int = 150   # 2.5 horas antes de H_START = punto de no retorno
     GDP_RADIUS_KM:   int = 3000  # Radio de cobertura del GDP (km desde LEBL)
 
     @property

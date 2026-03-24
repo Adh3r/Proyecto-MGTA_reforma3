@@ -108,20 +108,12 @@ def _simular_gdp_ligero(
         df_vuelos,
         params,
         radius_km=radius_km,
-        h_freeze_offset=h_freeze_offset,
+        h_file_offset=h_freeze_offset,
     )
 
     df_resultado = resultados['vuelos_asignados']
     kpis         = calcular_kpis_economicos(df_resultado)
 
-    # Retraso irrecuperable: retraso total de los vuelos que ya estaban en el aire
-    # cuando se activó el GDP. Si el GDP se cancela, este retraso no se puede evitar.
-    retraso_irrecuperable = float(
-    df_resultado[
-        (df_resultado['flight_status'] == FS_AIRBORNE) &
-        (df_resultado['distancia_km'] <= radius_km)
-    ]['total_delay'].sum()
-)
 
     # Devolvemos solo los KPIs que necesitamos para los heatmaps
     # (no toda la tabla de vuelos, para ahorrar memoria en las 42 ejecuciones)
@@ -129,7 +121,7 @@ def _simular_gdp_ligero(
         'radius_km':           radius_km,
         'h_freeze_offset':     h_freeze_offset,
         'air_delay_total':     float(df_resultado['air_delay'].sum()),
-        'unrecoverable_delay': retraso_irrecuperable,
+        'unrecoverable_delay': kpis['unrecoverable_delay'],
         'cost_savings':        kpis['cost_savings'],
         'co2_savings':         kpis['co2_savings'],
         'co2_aire_delay':      kpis['co2_aire_delay'],
@@ -234,6 +226,11 @@ def ejecutar_analisis_sensibilidad(
             columns='radius_km',
             values=nombre_kpi,
         )
+
+        # Imprimir en consola TODAS las matrices
+        print(f"\n📊 --- MATRIZ EXACTA: {titulo.upper()} ({unidad}) ---")
+        print(df_matriz.round(1).to_string())
+        print("-" * 60)
 
         # Encontrar la celda con el valor óptimo (mínimo o máximo según el KPI)
         valores = df_matriz.values.astype(float)

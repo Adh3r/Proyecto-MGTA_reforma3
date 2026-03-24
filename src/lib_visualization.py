@@ -27,6 +27,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm
 
 # Importamos calcular_kpis_economicos para el gráfico de impacto económico.
 # Usamos la misma función que el Excel para garantizar que los números coinciden.
@@ -89,58 +90,29 @@ def generar_heatmap(
 
     plt.figure(figsize=(12, 7))
 
-    # Aplanamos la matriz a una lista 1D para calcular los percentiles
+    # Aplanamos la matriz para obtener el mínimo y máximo REALES
     todos_los_valores = df_matriz.values.flatten()
-    plt.figure(figsize=(12, 7))
+    limite_inferior = todos_los_valores.min()
+    limite_superior = todos_los_valores.max()
 
-    # Aplanamos la matriz a una lista 1D para calcular los percentiles
-    todos_los_valores = df_matriz.values.flatten()
+    # Protección de seguridad: LogNorm falla si hay valores <= 0. 
+    # Si el mínimo es 0 (ej. algún retraso irrecuperable perfecto), lo subimos a 1 para el color.
+    if limite_inferior <= 0:
+        limite_inferior = 0.1 
 
-    # Límites de color: percentiles 10 y 90 para ignorar outliers extremos
-    limite_inferior = np.nanpercentile(todos_los_valores, 10)
-    limite_superior = np.nanpercentile(todos_los_valores, 90)
-
-    # Si todos los valores son iguales, usamos el mínimo y máximo absolutos
-    # (de lo contrario vmin == vmax y matplotlib lanzaría un error)
-    if limite_inferior == limite_superior:
-        limite_inferior = todos_los_valores.min()
-        limite_superior = todos_los_valores.max()
-
-    # Paleta de 5 colores discretos:
-    #   'RdYlGn'   → Rojo (malo) a Verde (bueno): usada cuando más = mejor
-    #   'RdYlGn_r' → Verde (bueno) a Rojo (malo): usada cuando menos = mejor
-    #   El segundo argumento (5) divide la paleta en exactamente 5 tonos.
     nombre_paleta = "RdYlGn" if mejor == 'max' else "RdYlGn_r"
-    paleta_5_colores = plt.get_cmap(nombre_paleta, 5)
+    paleta_continua = plt.get_cmap(nombre_paleta)
 
-    # Formato numérico de las anotaciones dentro de las celdas:
-    #   ",.0f" → número entero con separador de miles (ej: 35,000)
-    #   ".1f"  → un decimal (ej: 68.8)
     formato_numero = ",.0f" if any(x in unidad for x in ["EUR", "kg"]) else ".1f"
 
-    # -------------------------------------------------------------------------
-    # DIBUJAR EL HEATMAP CON SEABORN
-    #
-    # sns.heatmap() es la función principal de seaborn para heatmaps.
-    # Parámetros clave:
-    #   annot=True     → Muestra el valor numérico dentro de cada celda
-    #   fmt=           → Formato de ese número
-    #   cmap=          → Paleta de colores a usar
-    #   vmin/vmax=     → Límites de la escala de color
-    #   linewidths=    → Grosor de las líneas entre celdas
-    #   cbar_kws=      → Opciones de la barra de color lateral
-    # -------------------------------------------------------------------------
+    # Pintamos el Heatmap usando norm=LogNorm
     ax = sns.heatmap(
         df_matriz,
         annot=True,
         fmt=formato_numero,
-        cmap=paleta_5_colores,
-        vmin=limite_inferior,
-        vmax=limite_superior,
-        cbar_kws={
-            'label': unidad,
-            'ticks': np.linspace(limite_inferior, limite_superior, 6),
-        },
+        cmap=paleta_continua,
+        norm=LogNorm(vmin=limite_inferior, vmax=limite_superior), # <--- ESTE ES EL TRUCO MAGNÍFICO
+        cbar_kws={'label': unidad},
         linewidths=1.5,
         linecolor='white',
         annot_kws={"size": 8, "weight": "bold"},
@@ -150,7 +122,7 @@ def generar_heatmap(
     ax.set_xticklabels([f"{int(c)} km"  for c in df_matriz.columns])
     ax.set_yticklabels([f"{int(i)} min" for i in df_matriz.index], rotation=0)
     ax.set_xlabel('GDP Radius of Exemption R (km)',      fontsize=11, fontweight='bold')
-    ax.set_ylabel('Freeze Horizon HFile (min)',          fontsize=11, fontweight='bold')
+    ax.set_ylabel('T File Offset (min)',          fontsize=11, fontweight='bold')
     ax.set_title(titulo.upper(), fontsize=13, fontweight='bold', pad=20)
 
     # -------------------------------------------------------------------------
