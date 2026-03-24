@@ -197,7 +197,7 @@ def etiquetar_vuelos_gdp(
 
     # vuelos que despegaron antes de este minuto
     # ya no pueden recibir un nuevo CTOT (hora de salida asignada).
-    minuto_congelacion = h_start - h_freeze_offset
+    minuto_congelacion = h_start + h_freeze_offset
 
     # --- Tres checks (True/False) por vuelo ---
 

@@ -45,6 +45,7 @@ def generar_heatmap(
     ruta_salida: str,
     fila_optima: int,
     columna_optima: int,
+    
 ) -> None:
     """
     Genera y guarda un heatmap de una matriz KPI en función de R y HFile.
@@ -78,6 +79,18 @@ def generar_heatmap(
         fila_optima:    Índice de fila de la celda óptima (para marcarla).
         columna_optima: Índice de columna de la celda óptima (para marcarla).
     """
+    # 1. Damos la vuelta a los valores del eje Y (HFile)
+    df_matriz = df_matriz.sort_index(ascending=False)
+
+    # 2. Corregimos la posición del recuadro azul ("★ BEST"). 
+    # Al dar la vuelta a la tabla, la fila óptima cambia de coordenada visual.
+    fila_optima = (len(df_matriz) - 1) - fila_optima
+    # =========================================================
+
+    plt.figure(figsize=(12, 7))
+
+    # Aplanamos la matriz a una lista 1D para calcular los percentiles
+    todos_los_valores = df_matriz.values.flatten()
     plt.figure(figsize=(12, 7))
 
     # Aplanamos la matriz a una lista 1D para calcular los percentiles
