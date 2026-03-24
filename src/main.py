@@ -120,6 +120,7 @@ def ejecutar_proyecto_completo() -> None:
         resultados['timeline'],       # Pestaña 0: curvas de Newell (para el gráfico)
         r_min_newell,                 # Pestaña 0: retraso mínimo teórico
         PATH_OUTPUT_EXCEL,
+        df_res_comprimido=resultados['vuelos_comprimidos'] # <-- ¡NUEVA LÍNEA!
     )
     print("   → Excel de auditoría guardado en data/processed/")
 

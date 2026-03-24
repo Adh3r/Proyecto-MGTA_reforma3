@@ -8,6 +8,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+import numpy as np
 
 from config import COST_AIR_MIN, COST_GND_MIN, FS_CANDIDATE, FS_AIRBORNE, FS_INTERNATIONAL, FS_DISTANCE
 from lib_gdp_core import calcular_kpis_economicos
@@ -196,6 +197,63 @@ def _sheet_matriz_slots(wb, df_slots):
     _autoajustar_columnas(ws); _congelar_primera_fila(ws)
     ws.sheet_view.showGridLines = False
 
+def _sheet_regulacion_comprimida(wb, df_res, df_res_comprimido):
+    """Pestaña 4: Comparativa Vuelo a Vuelo tras aplicar la compresión."""
+    if df_res_comprimido is None:
+        return 
+        
+    # 1. Extraemos los datos originales
+    df_orig = df_res[['ARCID', 'airline', 'flight_status', 'minutes_eta', 'assigned_slot', 'total_delay']].copy()
+    df_orig = df_orig.rename(columns={
+        'minutes_eta': 'ETA_Prog',
+        'assigned_slot': 'CTA_Original',
+        'total_delay': 'Retraso_Original'
+    })
+    
+    # 2. Extraemos los datos post-compresión
+    df_comp = df_res_comprimido[['ARCID', 'assigned_slot', 'total_delay']].copy()
+    df_comp = df_comp.rename(columns={
+        'assigned_slot': 'CTA_Nuevo',
+        'total_delay': 'Retraso_Nuevo'
+    })
+    
+    # 3. Cruzamos ambas tablas por el identificador del vuelo
+    df_export = pd.merge(df_orig, df_comp, on='ARCID', how='left')
+    
+    # 4. Lógica para determinar el impacto de la compresión en cada vuelo
+    def determinar_estado(row):
+        if pd.isna(row['CTA_Nuevo']):
+            return "❌ Penalty, very high delay"
+        elif row['CTA_Nuevo'] < row['CTA_Original']:
+            return "✅ Compressed"
+        else:
+            return "➖ No changes"
+            
+    df_export['Estado_Compresion'] = df_export.apply(determinar_estado, axis=1)
+    
+    # Calculamos los minutos ahorrados 
+    df_export['Minutos_Ahorrados'] = np.where(
+        df_export['Estado_Compresion'] == "✅ Adelantado (Comprimido)",
+        df_export['Retraso_Original'] - df_export['Retraso_Nuevo'],
+        0
+    )
+    
+    # 5. Limpieza y orden final
+    df_export = df_export.sort_values('ETA_Prog').reset_index(drop=True)
+    columnas_finales = [
+        'ARCID', 'airline', 'flight_status', 'ETA_Prog', 
+        'CTA_Original', 'CTA_Nuevo', 
+        'Retraso_Original', 'Retraso_Nuevo', 
+        'Minutos_Ahorrados', 'Estado_Compresion'
+    ]
+    df_export = df_export[columnas_finales]
+                     
+    ws = wb.create_sheet('4_Regulacion_Comprimida')
+    _escribir_dataframe_con_formato(ws, df_export)
+    _autoajustar_columnas(ws)
+    _congelar_primera_fila(ws)
+    ws.sheet_view.showGridLines = False
+
 
 def _sheet_kpis_comparativa(wb, df_res):
     kpis = calcular_kpis_economicos(df_res)
@@ -363,19 +421,21 @@ def exportar_auditoria_excel(
     timeline: pd.DataFrame,
     r_min_newell: float,
     path: str,
+    df_res_comprimido: pd.DataFrame = None, 
 ) -> None:
     """
     Construye el Excel maestro de auditoria.
 
     Args:
         df_vuelos_crudo: DataFrame original pre-GDP.
-        df_res:          Resultados del GDP con retrasos calculados.
-        df_slots:        Matriz de slots generados.
+        df_res:          Resultados del GDP (RBS Base).
+        df_slots:        Matriz de slots generados (RBS Base).
         params:          Parametros del escenario (AAR, PAAR, H_START...).
         h_noreg:         Minuto del dia en que la cola se disuelve.
-        timeline:        Curvas de Newell minuto a minuto (para graficos).
+        timeline:        Curvas de Newell minuto a minuto.
         r_min_newell:    Retraso minimo teorico calculado.
         path:            Ruta completa del .xlsx de salida.
+        df_res_comprimido: Resultados tras aplicar penalización y compresión.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
@@ -386,10 +446,13 @@ def exportar_auditoria_excel(
         if '_tmp' in wb.sheetnames:
             del wb['_tmp']
 
+        # Llamadas a las pestañas
         _sheet_parametros(wb, params, h_noreg, r_min_newell)
         _sheet_datos_crudos(wb, df_vuelos_crudo)
         _sheet_regulacion_gdp(wb, df_res)
         _sheet_matriz_slots(wb, df_slots)
+        if df_res_comprimido is not None:
+            _sheet_regulacion_comprimida(wb, df_res, df_res_comprimido)
         _sheet_kpis_comparativa(wb, df_res)
         _sheet_analisis_retrasos(wb, df_res, df_slots)
         _sheet_equidad_rbs(wb, df_res)

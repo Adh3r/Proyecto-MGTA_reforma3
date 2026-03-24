@@ -107,15 +107,15 @@ def simular_curvas_newell(
         demanda_hasta_ahora = timeline.loc[minuto, 'demand_accum']
 
         if minuto < h_start:
-            # FASE A: sin restricciones — la capacidad absorbe todo lo que llega
+            # FASE A: sin restricciones - la capacidad absorbe todo lo que llega
             capacidad_actual = demanda_hasta_ahora
 
         elif h_start <= minuto <= h_end:
-            # FASE B: LVP activo — solo podemos aceptar 'tasa_reducida' aviones/min
+            # FASE B: LVP activo - solo podemos aceptar 'tasa_reducida' aviones/min
             capacidad_actual += tasa_reducida
 
         else:
-            # FASE C: recuperación — aceptamos a tasa nominal, pero sin superar
+            # FASE C: recuperación - aceptamos a tasa nominal, pero sin superar
             # la demanda real (no podemos "inventar" aterrizajes)
             if capacidad_actual < demanda_hasta_ahora:
                 capacidad_actual += tasa_nominal
@@ -133,10 +133,10 @@ def simular_curvas_newell(
     ).clip(lower=0)
 
     # -------------------------------------------------------------------------
-    # H_NOREG: ¿Cuándo se disuelve la cola?
-    # Buscamos el primer minuto DESPUÉS del GDP en que la cola baja de 0.5 aviones.
+    # H_NOREG:Cuándo se disuelve la cola?
+    # Buscamos el primer minuto despues del GDP en que la cola baja de 0.5 aviones.
     # Usamos 0.5 (no 0) para absorber pequeños errores de redondeo en la suma.
-    # Si la cola no desaparece antes de medianoche, devolvemos 1440 (fin del día).
+    # Si la cola no desaparece antes de las 00, devolvemos 1440 (fin del día).
     # -------------------------------------------------------------------------
     try:
         h_noreg = int(
@@ -146,14 +146,14 @@ def simular_curvas_newell(
         )
     except IndexError:
         # IndexError ocurre cuando el filtro no encuentra ningún minuto
-        # → la cola no se disuelve en todo el día
+        # la cola no se disuelve en todo el día
         h_noreg = 1440
 
     return timeline, h_noreg
 
 
 # =============================================================================
-# 2. ETIQUETADO DE VUELOS — ¿A QUÉ VUELOS PODEMOS REGULAR?
+# 2. ETIQUETADO DE VUELOS — VUELOS QUE PODEMOS REGULAR
 # =============================================================================
 
 def etiquetar_vuelos_gdp(
@@ -168,16 +168,14 @@ def etiquetar_vuelos_gdp(
         GPD CANDIDATE        → Podemos retrasarlo en tierra (es el que el GDP controla).
         EXEMPT INTERNATIONAL → Viene de fuera del espacio aéreo europeo (ECAC).
                                No podemos obligarle a seguir un CTOT.
-        EXEMPT AIRBORNE      → Ya despegó antes de que activáramos el GDP.
+        EXEMPT AIRBORNE      → Ya despegó antes de que activaramos el GDP.
                                No podemos retrasarlo: ya está en el aire.
         EXEMPT DISTANCE      → Sale de tan lejos que cuando llega el GDP ya habrá terminado.
                                El radio de cobertura del GDP no llega a su origen.
 
-    LÓGICA DE PRIORIDAD (el orden importa):
+    el orden importa:
         Un vuelo intercontinental que ya despegó NO se etiqueta como AIRBORNE,
         sino como INTERNATIONAL. La categoría ECAC tiene prioridad.
-        Esto es así porque el criterio de exención más restrictivo es siempre
-        el de jurisdicción, no el de timing.
 
     FREEZE HORIZON (H_FREEZE_OFFSET):
         El GDP no puede notificar a un avión que ya está en el aire.
@@ -187,9 +185,9 @@ def etiquetar_vuelos_gdp(
 
     Args:
         df_vuelos:       Tabla de vuelos con is_ecac, minutes_etd, distancia_km.
-        h_start:         Minuto de inicio del GDP (ej: 360 = 06:00 UTC).
-        radius_km:       Radio máximo de cobertura del GDP en km (ej: 3000 km).
-        h_freeze_offset: Minutos antes de H_START que define el "punto de no retorno".
+        h_start:         Minuto de inicio del GDP (360 = 06:00).
+        radius_km:       Radio máximo de cobertura del GDP en km (3000 km).
+        h_freeze_offset: Minutos antes de H_START.
 
     Returns:
         Copia de df_vuelos con 4 columnas nuevas:
@@ -197,19 +195,19 @@ def etiquetar_vuelos_gdp(
     """
     df = df_vuelos.copy()
 
-    # El "punto de no retorno": vuelos que despegaron antes de este minuto
+    # vuelos que despegaron antes de este minuto
     # ya no pueden recibir un nuevo CTOT (hora de salida asignada).
     minuto_congelacion = h_start - h_freeze_offset
 
-    # --- Tres banderas (True/False) por vuelo ---
+    # --- Tres checks (True/False) por vuelo ---
 
-    # ¿Ya despegó antes del punto de no retorno?
+    # Despegó antes del hfile?
     df['is_departed'] = df['minutes_etd'] < minuto_congelacion
 
-    # ¿Su aeropuerto de origen está dentro del radio de cobertura del GDP?
+    # Su aeropuerto de origen está dentro del radio de cobertura del GDP?
     df['is_inside_radius'] = df['distancia_km'] <= radius_km
 
-    # ¿Es candidato GDP? Solo si cumple las TRES condiciones a la vez:
+    # Es candidato GDP? Solo si cumple las 3 condiciones a la vez:
     df['is_gpd_candidate'] = (
         df['is_ecac']            # 1. Origen en espacio aéreo europeo (ECAC)
         & ~df['is_departed']     # 2. Aún no ha despegado (el ~ invierte True/False)
@@ -220,16 +218,16 @@ def etiquetar_vuelos_gdp(
     # Asignación de etiqueta final usando np.select()
     #
     # np.select() es el equivalente vectorizado de un if-elif-else aplicado
-    # a toda la columna de una vez (mucho más rápido que un bucle for).
+    # a toda la columna de una vez.
     # Evalúa las condiciones en orden: la PRIMERA que sea True gana.
-    # Si ninguna condición es True, asigna el valor 'default'.
+    # Si ninguna condición es True, asigna el valor predeterminado.
     #
     # Equivalente en lenguaje natural:
     #   SI es candidato GDP        → FS_CANDIDATE
     #   SINO SI no es ECAC         → FS_INTERNATIONAL
     #   SINO SI ya despegó         → FS_AIRBORNE
     #   SINO SI fuera del radio    → FS_DISTANCE
-    #   EN CUALQUIER OTRO CASO     → 'UNKNOWN' (no debería ocurrir nunca)
+    #   EN CUALQUIER OTRO CASO     → 'UNKNOWN' --> solo saldra si hubiese algun error
     # -------------------------------------------------------------------------
     condiciones = [
         df['is_gpd_candidate'],   # Condición 1: es regulable
@@ -276,7 +274,7 @@ def asignar_slots_rbs(
             Se les asigna el primer slot disponible tras los exentos.
             Si el slot disponible es posterior a su ETA → hay retraso en tierra.
 
-    POR QUÉ DOS PASADAS Y NO UNA:
+    HAREMOS DOS PASADAS:
         Si mezcláramos ambos grupos, un candidato GDP podría "robar" el slot
         de un exento que llega en ese mismo minuto. Los exentos tienen prioridad
         operacional porque ya no tienen margen de maniobra.
@@ -291,7 +289,7 @@ def asignar_slots_rbs(
     df = df_regulados.copy()
     df['assigned_slot'] = np.nan  # Empezamos sin asignar nada
 
-    # Dos pasadas: primero exentos (False = no son GDP candidate), luego candidatos
+    # Dos pasadas: primero exentos, luego candidatos
     for procesar_candidatos_gdp in [False, True]:
 
         if procesar_candidatos_gdp:
@@ -566,20 +564,40 @@ def ejecutar_nucleo_gdp(
     df_en_ventana = df_vuelos_etiquetados[
         df_vuelos_etiquetados['minutes_eta'] >= params['H_START']
     ].copy()
-    df_resultado = asignar_slots_rbs(df_en_ventana, df_slots)
+    #df_resultado = asignar_slots_rbs(df_en_ventana, df_slots)
 
-    # PASO 5: Calcular retrasos (total, en aire y en tierra)
-    df_resultado = calcular_delays(df_resultado)
+    df_slots_original = df_slots.copy()
+    df_resultado_original = asignar_slots_rbs(df_en_ventana, df_slots_original)
+    df_resultado_original = calcular_delays(df_resultado_original)
+
+   # PASO 5: Calcular retrasos (total, en aire y en tierra)
+    from lib_compression import penalty_and_compression
+    
+    # Llamamos a la función SOLO con los argumentos que acepta y recogemos un solo resultado
+    df_resultado_comprimido = penalty_and_compression(
+        df_vuelos_asignados=df_resultado_original, 
+        num_penalizados=12
+    )
+    
+    # Recalculamos los retrasos para la versión comprimida
+    df_resultado_comprimido = calcular_delays(df_resultado_comprimido)
+    df_slots_comprimido = df_slots_original.copy()
 
     return {
-        'vuelos_asignados': df_resultado,   # Tabla principal con slots y retrasos
-        'vuelos_crudos':    df_vuelos,      # Tabla original sin modificar (trazabilidad)
-        'slots':            df_slots,       # Rejilla de slots generados
-        'timeline':         timeline,       # Curvas de Newell minuto a minuto
-        'h_noreg':          h_noreg,        # Minuto en que la cola desaparece
-        'params':           params,         # Parámetros usados (para el Excel)
+        # Resultados SIN comprimir
+        'vuelos_asignados': df_resultado_original, 
+        'slots':            df_slots_original,
+        
+        # Resultados CON compresión
+        'vuelos_comprimidos': df_resultado_comprimido,
+        'slots_comprimidos':  df_slots_comprimido,
+        
+        # Datos comunes
+        'vuelos_crudos':    df_vuelos,      
+        'timeline':         timeline,       
+        'h_noreg':          h_noreg,        
+        'params':           params,         
     }
-
 
 # =============================================================================
 # MODO DEBUG — Ejecutar directamente para probar este módulo de forma aislada.
