@@ -23,6 +23,7 @@
 import os
 import numpy as np
 import pandas as pd
+from scipy.optimize import milp, Bounds, LinearConstraint #librerias para trabajar con linear programing en python
 
 from config import (
     CFG,
@@ -368,6 +369,65 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def resolve_ghp_intlinprog(df_vuelos, slots, r=1):
+    #resolver GHP como programacion lineal de enteros
+    #objective function = min sum(coste*delay)
+
+    vuelos = df_vuelos.copy().reset_index()
+    num_vuelos = len(vuelos)
+    num_slots = len(slots)
+
+    #definir los costes, cuando r = 1 estamos haciendo la verification task
+    cost_matrix = np.zeros((num_vuelos, num_slots))
+
+    for f in range(num_vuelos):
+        eta_f = vuelos.loc[f, 'minutes_eta']
+        for t in range (num_slots):
+            slot_time = slots [t]
+            if slot_time < eta_f:
+                #aplicamos el metodo de la M asignando un numero de penalizacion enorme a un vuelo para que no pueda llegar ant4es de su ETA
+                cost_matrix[f, t] = 1e10
+            else:
+                #coste = delay * factor de coste del vuelo (r)
+                cost_matrix[f,t] = (slot_time - eta_f) * r
+    #ahora convertimos el la matriz en el vector c para poder resolverlo con el solver
+    c = cost_matrix.flatten()
+    #CONSTRAINTS:
+    #--> Cada vuelo tiene exactamente un slot
+    A_eq_vuelos = np.zeros((num_vuelos, num_slots * num_vuelos))
+    for f in range (num_vuelos):
+        A_eq_vuelos[f, f*num_slots : (f+1)*num_slots] = 1
+    b_eq_vuelos = np.ones(num_vuelos)
+    #--> cada slot tiene exctamente un vuelo
+    A_ub_slots = np.zeros((num_slots, num_vuelos*num_slots))
+    for t in range(num_slots):
+        A_ub_slots[t, t::num_slots] = 1
+    b_ub_slots = np.ones(num_slots)
+    #Resolvenos integer linear programing con variables binarias
+    res = milp(
+        c=c,
+        constraints=[
+            LinearConstraint(A_eq_vuelos, b_eq_vuelos, b_eq_vuelos), # Igual a 1
+            LinearConstraint(A_ub_slots, 0, b_ub_slots)             # Menor o igual a 1
+        ],
+        integrality=np.ones_like(c), # Todas las variables son enteras (0 o 1)
+        bounds=Bounds(0, 1)
+    )
+
+    if res.success:
+        #cosntruimos la solucion
+        x = res.x.reshape((num_vuelos, num_slots))
+        asignaciones = []
+        for f in range(num_vuelos):
+            slot_idx = np.argmax(x[f, :])
+            asignaciones.append(slots[slot_idx])
+        
+        vuelos['assigned_slot'] = asignaciones
+        return vuelos
+    else:
+        raise ValueError("no se encontro solucion")
+
+
 
 # =============================================================================
 # 5. RETRASO MÍNIMO TEÓRICO — ¿CUÁL ES EL MÍNIMO INEVITABLE?
@@ -594,6 +654,7 @@ def ejecutar_nucleo_gdp(
         df_vuelos_etiquetados['minutes_eta'] >= params['H_START']
     ].copy()
     #df_resultado = asignar_slots_rbs(df_en_ventana, df_slots)
+    df_resultado_ghp = resolve_ghp_intlinprog(df_vuelos = df_en_ventana, slots = df_slots['slot_start_min'].values, r = 1)
 
     df_slots_original = df_slots.copy()
     df_resultado_original = asignar_slots_rbs(df_en_ventana, df_slots_original)
@@ -602,6 +663,8 @@ def ejecutar_nucleo_gdp(
    # PASO 5: Calcular retrasos (total, en aire y en tierra)
     from lib_compression import penalty_and_compression
     
+    df_resultado_ghp = calcular_delays(df_resultado_ghp)
+
     # Llamamos a la función SOLO con los argumentos que acepta y recogemos un solo resultado
     df_resultado_comprimido = penalty_and_compression(
         df_vuelos_asignados=df_resultado_original, 
