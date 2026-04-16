@@ -369,7 +369,7 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def resolve_ghp_intlinprog(df_vuelos, slots, r=1):
+def resolve_ghp_intlinprog(df_vuelos, slots, r_f=1):
     #resolver GHP como programacion lineal de enteros
     #objective function = min sum(coste*delay)
 
@@ -389,7 +389,7 @@ def resolve_ghp_intlinprog(df_vuelos, slots, r=1):
                 cost_matrix[f, t] = 1e10
             else:
                 #coste = delay * factor de coste del vuelo (r)
-                cost_matrix[f,t] = (slot_time - eta_f) * r
+                cost_matrix[f,t] = (slot_time - eta_f) * r_f
     #ahora convertimos el la matriz en el vector c para poder resolverlo con el solver
     c = cost_matrix.flatten()
     #CONSTRAINTS:
@@ -589,6 +589,7 @@ def ejecutar_nucleo_gdp(
     params: dict,
     radius_km: int       = CFG.GDP_RADIUS_KM,
     h_file_offset: int = CFG.H_FILE_OFFSET,
+    run_ghp: bool        = False  # <--- NUEVO PARÁMETRO (por defecto no se ejecuta)
 ) -> dict:
     """
     Orquestador de la Fase 2: ejecuta los 5 pasos del GDP en orden.
@@ -648,47 +649,65 @@ def ejecutar_nucleo_gdp(
         'flight_id':      None,    # Se rellenará en el Paso 4
     })
 
-    # PASO 4: Asignar slots usando el algoritmo RBS
-    # Solo procesamos vuelos cuya ETA está dentro de la ventana GDP
+ # PASO 4: Asignar slots usando el algoritmo RBS (Escenario Base / Original)
     df_en_ventana = df_vuelos_etiquetados[
         df_vuelos_etiquetados['minutes_eta'] >= params['H_START']
     ].copy()
-    #df_resultado = asignar_slots_rbs(df_en_ventana, df_slots)
-    df_resultado_ghp = resolve_ghp_intlinprog(df_vuelos = df_en_ventana, slots = df_slots['slot_start_min'].values, r = 1)
 
+    # Calculamos SIEMPRE el RBS (es instantáneo y lo necesitamos para el reporte)
     df_slots_original = df_slots.copy()
     df_resultado_original = asignar_slots_rbs(df_en_ventana, df_slots_original)
     df_resultado_original = calcular_delays(df_resultado_original)
-
-   # PASO 5: Calcular retrasos (total, en aire y en tierra)
-    from lib_compression import penalty_and_compression
     
-    df_resultado_ghp = calcular_delays(df_resultado_ghp)
+    # Calculamos el total de RBS fuera del IF para que la variable siempre exista
+    retraso_rbs = df_resultado_original['total_delay'].sum()
 
-    # Llamamos a la función SOLO con los argumentos que acepta y recogemos un solo resultado
+    # --- INICIO BLOQUE OPTIMIZACIÓN GHP (Solo si run_ghp=True) ---
+    df_resultado_ghp = None # Por defecto es None para las 42 casillas
+    
+    if run_ghp:
+        print("\n" + "⚙️  Ejecutando optimización GHP para validación...")
+        
+        # Ejecutamos la optimización (Task 1: r_f = 1)
+        df_resultado_ghp = resolve_ghp_intlinprog(
+            df_vuelos=df_en_ventana, 
+            slots=df_slots['slot_start_min'].values, 
+            r_f=1
+        )
+        df_resultado_ghp = calcular_delays(df_resultado_ghp)
+        retraso_ghp = df_resultado_ghp['total_delay'].sum()
+
+        # Ahora que AMBOS están calculados, imprimimos la comparativa
+        print("\n" + "═"*50)
+        print("🚀 VALIDACIÓN TASK 1: RBS vs OPTIMIZACIÓN")
+        print(f"   • Retraso Total RBS: {retraso_rbs:.2f} min")
+        print(f"   • Retraso Total GHP: {retraso_ghp:.2f} min")
+        print("─"*50)
+
+        if abs(retraso_rbs - retraso_ghp) < 0.1:
+            print("   ✅ ¡ÉXITO! Los resultados coinciden.")
+        else:
+            print("   ❌ ERROR: Los resultados difieren.")
+        print("═"*50 + "\n")
+    # --- FIN BLOQUE OPTIMIZACIÓN ---
+
+    # PASO 5: Compresión (WP 2)
+    from lib_compression import penalty_and_compression
     df_resultado_comprimido = penalty_and_compression(
         df_vuelos_asignados=df_resultado_original, 
         num_penalizados=12
     )
-    
-    # Recalculamos los retrasos para la versión comprimida
     df_resultado_comprimido = calcular_delays(df_resultado_comprimido)
-    df_slots_comprimido = df_slots_original.copy()
 
     return {
-        # Resultados SIN comprimir
         'vuelos_asignados': df_resultado_original, 
-        'slots':            df_slots_original,
-        
-        # Resultados CON compresión
+        'slots': df_slots_original,
         'vuelos_comprimidos': df_resultado_comprimido,
-        'slots_comprimidos':  df_slots_comprimido,
-        
-        # Datos comunes
-        'vuelos_crudos':    df_vuelos,      
-        'timeline':         timeline,       
-        'h_noreg':          h_noreg,        
-        'params':           params,         
+        'vuelos_ghp': df_resultado_ghp, # Devolvemos esto por si quieres graficarlo
+        'vuelos_crudos': df_vuelos,
+        'timeline': timeline,
+        'h_noreg': h_noreg,
+        'params': params,
     }
 
 # =============================================================================

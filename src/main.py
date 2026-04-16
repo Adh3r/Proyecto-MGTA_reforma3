@@ -85,7 +85,7 @@ def ejecutar_proyecto_completo() -> None:
     # La Fase 4 repetirá esta simulación 42 veces con distintos R y HFile.
     print("\n[FASE 2] Ejecutando motor de simulación y algoritmo RBS...")
 
-    resultados = gdp.ejecutar_nucleo_gdp(df_vuelos, params)
+    resultados = gdp.ejecutar_nucleo_gdp(df_vuelos, params, run_ghp=True)
 
     df_final = resultados['vuelos_asignados']
     df_slots = resultados['slots']
