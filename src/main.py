@@ -31,6 +31,7 @@ import lib_visualization as vis
 from config import CFG
 from lib_gdp_core import calcular_retraso_minimo_newell
 from config import FS_CANDIDATE
+from lib_ghp_solver import ejecutar_ghp_completo
 
 
 def ejecutar_proyecto_completo() -> None:
@@ -74,7 +75,7 @@ def ejecutar_proyecto_completo() -> None:
     print("\n[FASE 1] Preparando datos y escenario...")
 
     params = CFG.to_params_dict()
-
+    
     df_vuelos = prep.preparar_vuelos(PATH_VUELOS_RAW, PATH_FLOTA_RAW)
     print(f"✅ Datos cargados: {len(df_vuelos)} vuelos listos.")
 
@@ -89,12 +90,16 @@ def ejecutar_proyecto_completo() -> None:
 
     df_final = resultados['vuelos_asignados']
     df_slots = resultados['slots']
+    slots_list = list(df_slots['slot_start_min'])
 
     # Resumen rápido en consola para verificar que la simulación tiene sentido
     candidatos = df_final[df_final['flight_status'] == FS_CANDIDATE]
     print(f"   Vuelos regulados (GDP): {len(candidatos)}")
     print(f"   Vuelos exentos:         {len(df_final) - len(candidatos)}")
     print(f"   Retraso medio global:   {df_final['total_delay'].mean():.1f} min/vuelo")
+    # GHP
+    from lib_ghp_solver import ejecutar_ghp_completo, calcular_kpis_ghp
+    resultados_ghp = ejecutar_ghp_completo(df_final, slots_list, params)
 
     # =========================================================================
     # FASE 3: GENERACIÓN DE ENTREGABLES DEL ESCENARIO BASE

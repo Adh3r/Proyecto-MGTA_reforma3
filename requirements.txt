@@ -26,3 +26,5 @@ pulp>=2.7.0
 
 # Tests automatizados
 pytest>=7.0.0
+# Solver de Programación Lineal Entera — equivalente a intlinprog de MATLAB
+pulp>=2.9.0
