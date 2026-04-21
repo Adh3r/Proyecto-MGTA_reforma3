@@ -26,7 +26,7 @@
 #         b) Turn-around time (reactionary delay si delay > TAT disponible)
 #
 # HIPÓTESIS (justificadas en el informe):
-#   - Load factor europeo: 84% (IATA Annual Review 2024, dato para Europa)
+#   - Load factor europeo: 83,5% (IATA Annual Review 2024, dato para Europa)
 #   - Conexiones perdidas: 20% de pasajeros son de conexión en LEBL
 #     (Fuente: AENA estadísticas LEBL 2024 — LEBL tiene ~18-22% transit PAX)
 #   - Coste por pasajero perdiendo conexión: 200 EUR
@@ -62,7 +62,7 @@ MAX_AIR_DELAY_MIN = 90
 
 # Load factor europeo (fracción de asientos ocupados).
 # Fuente: IATA Annual Review 2024, p.18 — promedio europeo 2024: 84.1%
-LOAD_FACTOR_EU = 0.84
+LOAD_FACTOR_EU = 0.835
 
 # Fracción de pasajeros de conexión en LEBL.
 # Fuente: AENA Informe Anual LEBL 2024 — tráfico de tránsito ~20%.
@@ -719,6 +719,7 @@ if __name__ == '__main__':
     resultados_ghp = ejecutar_ghp_completo(
         df_etiquetado, slots_list, params, verbose=True
     )
+    
 
     # Verificar Task 1
     df_val = resultados_ghp['task1_validation']
