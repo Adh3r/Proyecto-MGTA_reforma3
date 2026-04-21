@@ -26,7 +26,7 @@
 #         b) Turn-around time (reactionary delay si delay > TAT disponible)
 #
 # HIPÓTESIS (justificadas en el informe):
-#   - Load factor europeo: 84% (IATA Annual Review 2024, dato para Europa)
+#   - Load factor europeo: 83,7% (IATA Annual Review 2025, dato para Europa)
 #   - Conexiones perdidas: 20% de pasajeros son de conexión en LEBL
 #     (Fuente: AENA estadísticas LEBL 2024 — LEBL tiene ~18-22% transit PAX)
 #   - Coste por pasajero perdiendo conexión: 200 EUR
@@ -55,14 +55,12 @@ from emissions_fuel_model import compute_co2_ask
 # CONSTANTES WP3
 # =============================================================================
 
-# Límite máximo de air delay para vuelos exentos (minutos).
-# Justificación: más de 90 min en holding implica desvío a alternativo.
-# Fuente: Eurocontrol NMOC operational guidelines.
+# Límite máximo de air delay para vuelos (minutos).
 MAX_AIR_DELAY_MIN = 90
 
 # Load factor europeo (fracción de asientos ocupados).
-# Fuente: IATA Annual Review 2024, p.18 — promedio europeo 2024: 84.1%
-LOAD_FACTOR_EU = 0.84
+# Fuente: IATA Annual Review 2025,  promedio europeo 2025: 83,7%
+LOAD_FACTOR_EU = 0.837
 
 # Fracción de pasajeros de conexión en LEBL.
 # Fuente: AENA Informe Anual LEBL 2024 — tráfico de tránsito ~20%.
@@ -74,11 +72,10 @@ FRAC_CONNECTING_PAX = 0.20
 COST_LOST_CONNECTION_EUR = 200
 
 # Turn-around time mínimo por categoría (minutos).
-# Fuente: IATA AHM 810; valores conservadores para narrow/wide body.
-# Si el delay supera el TAT disponible, genera reactionary delay.
+# Fuente: Eurocontrol
 TAT_MIN = {
     'narrow':  45,   # A320, B737 y similares (RECAT D, E, F)
-    'wide':    60,   # A330, B777 y similares (RECAT A, B, C)
+    'wide':    80,   # A330, B777 y similares (RECAT A, B, C)
 }
 
 # Multiplicador de coste para reactionary delay.
@@ -719,6 +716,7 @@ if __name__ == '__main__':
     resultados_ghp = ejecutar_ghp_completo(
         df_etiquetado, slots_list, params, verbose=True
     )
+    
 
     # Verificar Task 1
     df_val = resultados_ghp['task1_validation']
