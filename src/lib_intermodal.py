@@ -44,28 +44,25 @@ TIEMPO_ACCESO_ESTACION_MIN = 30
 
 # Destinos con conexión HSR directa desde Barcelona (LEBL)
 DESTINOS_HSR_DESDE_LEBL = {
-    'LEMD': {'ciudad': 'Madrid',    'tiempo_tren_h': 2.5},   # AVE Barcelona-Madrid
+    'LEMD': {'ciudad': 'Madrid',    'tiempo_tren_h': 3.5},   # AVE Barcelona-Madrid
     'LEVC': {'ciudad': 'Valencia',  'tiempo_tren_h': 3.0},   # AVE Barcelona-Valencia
     'LEZG': {'ciudad': 'Zaragoza',  'tiempo_tren_h': 1.5},   # AVE Barcelona-Zaragoza
-    'LFBO': {'ciudad': 'Toulouse',  'tiempo_tren_h': 3.5},   # Conexión internacional
-    'LEAL': {'ciudad': 'Alicante',  'tiempo_tren_h': 4.0},   # AVE / Euromed
-    'LFML': {'ciudad': 'Marsella',  'tiempo_tren_h': 4.5},   # AVE / TGV
+    'LFBO': {'ciudad': 'Toulouse',  'tiempo_tren_h': 4},   # Conexión internacional
+    'LEAL': {'ciudad': 'Alicante',  'tiempo_tren_h': 5.25},   # AVE / Euromed
+    'LFML': {'ciudad': 'Marsella',  'tiempo_tren_h': 7},   # AVE / TGV
     'LFLL': {'ciudad': 'Lyon',      'tiempo_tren_h': 5.0},   # AVE / TGV
 }
 
-# MATRIZ DE EMISIONES TREN (gCO2/pax-km) - Extraído de EcoPassenger / MITECO / SNCF
+# MATRIZ DE EMISIONES TREN kgCo2/ruta - Extraído de EcoPassenger / MITECO / SNCF
 # Usamos códigos OACI para que coincidan con la columna 'ADEP' del CSV
 FACTORES_CO2_TREN = {
-    'LEMD': 14.3,  # Madrid 
-    'LEVC': 14.5,  # Valencia
-    'LEAL': 14.5,  # Alicante
-    'LEZG': 14.5,  # Zaragoza
-    'LEBB': 15.1,  # Bilbao 
-    'LFML': 3.4,   # Marsella (Mix nuclear francés)
-    'LFBO': 3.4,   # Toulouse
-    'LFLL': 3.4,   # Lyon
-    'LFPO': 3.5,   # París Orly
-    'LFPG': 3.5,   # París CDG
+    'LEMD': 18.5,  # Madrid 
+    'LEVC': 10.7,  # Valencia
+    'LEAL': 15.5,  # Alicante
+    'LEZG': 8.3,  # Zaragoza 
+    'LFML': 7.3,   # Marsella (Mix nuclear francés)
+    'LFBO': 6.4,   # Toulouse
+    'LFLL': 7.9,   # Lyon
     'DEFAULT_ES': 14.8, # Otros aeropuertos en España (LExx)
     'DEFAULT_FR': 3.5,  # Otros aeropuertos en Francia (LFxx)
     'DEFAULT_INT': 25.0 # Resto del mundo / trenes convencionales
@@ -254,7 +251,7 @@ def generar_comparativa_intermodal(
         calcular_emision_tren(
             row['distancia_km'],
             row['ADEP'],
-            int(row.get('size_seats_avg', 180) * 0.84)
+            int(row.get('size_seats_avg', 180) * 0.837)
         )
         for _, row in df_substituibles.iterrows()
     )
