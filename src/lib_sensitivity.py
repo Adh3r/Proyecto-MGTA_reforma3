@@ -72,7 +72,7 @@ def _simular_gdp_ligero(
     df_vuelos: pd.DataFrame,
     params: dict,
     radius_km: int,
-    h_freeze_offset: int,
+    h_file: int,
 ) -> dict:
     """
     Ejecuta la simulación GDP completa para una combinación (R, HFile) concreta
@@ -94,7 +94,7 @@ def _simular_gdp_ligero(
         df_vuelos:       Tabla de vuelos preparada por la Fase 1.
         params:          Parámetros base del GDP (H_START, H_END, AAR, PAAR...).
         radius_km:       Radio de cobertura a probar en esta ejecución.
-        h_freeze_offset: Freeze horizon a probar en esta ejecución.
+        h_file: Freeze horizon a probar en esta ejecución.
 
     Returns:
         Diccionario con los KPIs de esta ejecución, listo para añadir a la tabla.
@@ -108,7 +108,7 @@ def _simular_gdp_ligero(
         df_vuelos,
         params,
         radius_km=radius_km,
-        h_file_offset=h_freeze_offset,
+        h_file_offset=h_file,
     )
 
     df_resultado = resultados['vuelos_asignados']
@@ -119,7 +119,7 @@ def _simular_gdp_ligero(
     # (no toda la tabla de vuelos, para ahorrar memoria en las 42 ejecuciones)
     return {
         'radius_km':           radius_km,
-        'h_freeze_offset':     h_freeze_offset,
+        'h_file':              h_file,
         'air_delay_total':     float(df_resultado['air_delay'].sum()),
         'unrecoverable_delay': kpis['unrecoverable_delay'],
         'cost_savings':        kpis['cost_savings'],
@@ -149,7 +149,7 @@ def ejecutar_analisis_sensibilidad(
 
     QUÉ ES "PIVOTAR" UNA TABLA:
         La tabla de resultados tiene una fila por simulación (42 filas) con columnas
-        radius_km, h_freeze_offset, air_delay_total, etc.
+        radius_km, h_file, air_delay_total, etc.
         Para dibujar un heatmap necesitamos una MATRIZ donde:
             - Las filas son los valores de HFile  (eje Y del heatmap)
             - Las columnas son los valores de R   (eje X del heatmap)
@@ -218,11 +218,11 @@ def ejecutar_analisis_sensibilidad(
     for nombre_kpi, titulo, unidad, mejor in HEATMAPS:
 
         # PIVOTAR: transformar la tabla lineal en una matriz 2D para el heatmap.
-        # index='h_freeze_offset' → las filas del heatmap serán los valores de HFile
+        # index='h_file' → las filas del heatmap serán los valores de HFile
         # columns='radius_km'     → las columnas del heatmap serán los valores de R
         # values=nombre_kpi       → el valor en cada celda es el KPI que estamos analizando
         df_matriz = df_cuadricula.pivot(
-            index='h_freeze_offset',
+            index='h_file',
             columns='radius_km',
             values=nombre_kpi,
         )
