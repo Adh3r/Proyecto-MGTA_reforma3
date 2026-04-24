@@ -2,21 +2,21 @@
 # src/lib_gdp_core.py
 # FASE 2: Motor de simulación del Ground Delay Program (GDP).
 #
-# Este módulo es el núcleo matemático del proyecto. Recibe los vuelos limpios
+# Núcleo matemático del proyecto. Recibe los vuelos procesados
 # de la Fase 1 y ejecuta toda la lógica del GDP paso a paso.
 #
-# FLUJO COMPLETO (en orden de ejecución):
+# FLUJO (en orden de ejecución):
 #   1. simular_curvas_newell()          → ¿Cuándo y cuánto colapsa el aeropuerto?
 #   2. etiquetar_vuelos_gdp()           → ¿A qué vuelos podemos regular?
 #   3. asignar_slots_rbs()              → ¿A qué hora aterriza cada vuelo regulado?
 #   4. calcular_delays()                → ¿Cuánto retrasa cada vuelo y dónde espera?
 #   5. calcular_retraso_minimo_newell() → ¿Cuál es el mínimo retraso inevitable?
 #   6. calcular_kpis_economicos()       → ¿Cuánto cuesta y cuánto CO2 se emite?
-#   7. ejecutar_nucleo_gdp()            → Orquestador: llama a todo lo anterior.
+#   7. ejecutar_nucleo_gdp()            → llama a todo lo anterior.
 #
-# SEPARACIÓN DE RESPONSABILIDADES:
+# SEPARACIÓN:
 #   - Los gráficos viven en lib_visualization.py
-#   - El Excel  vive en lib_excel_export.py
+#   - El Excel se genera en lib_excel_export.py
 #   - Las constantes (AAR, PAAR, costes...) viven en config.py
 # =============================================================================
 
@@ -35,7 +35,6 @@ from config import (
     FS_DISTANCE,
 )
 
-
 # =============================================================================
 # 1. MODELO DE NEWELL — ¿CUÁNDO Y CUÁNTO COLAPSA EL AEROPUERTO?
 # =============================================================================
@@ -48,7 +47,7 @@ def simular_curvas_newell(
     Construye las curvas acumuladas de demanda y capacidad del aeropuerto
     para todo el día (1440 minutos), siguiendo el Modelo de Newell.
 
-    QUÉ CALCULA ESTA FUNCIÓN:
+    QUE CALCULA:
         - Minuto a minuto, cuántos vuelos hay en cola.
         - H_NOREG: el minuto en que la cola desaparece (aeropuerto recuperado).
 
@@ -112,12 +111,12 @@ def simular_curvas_newell(
             capacidad_actual = demanda_hasta_ahora
 
         elif h_start <= minuto <= h_end:
-            # FASE B: LVP activo - solo podemos aceptar 'tasa_reducida' aviones/min
+            # FASE B: LVP activo - solo podemos aceptar la tasa reducida de aviones/min
             capacidad_actual += tasa_reducida
 
         else:
-            # FASE C: recuperación - aceptamos a tasa nominal, pero sin superar
-            # la demanda real (no podemos "inventar" aterrizajes)
+            # FASE C: recuperación - aceptamos la tasa nominal, pero sin superar
+            # la demanda real (no podemos inventar aterrizajes)
             if capacidad_actual < demanda_hasta_ahora:
                 capacidad_actual += tasa_nominal
 
@@ -152,7 +151,6 @@ def simular_curvas_newell(
 
     return timeline, h_noreg
 
-
 # =============================================================================
 # 2. ETIQUETADO DE VUELOS — VUELOS QUE PODEMOS REGULAR
 # =============================================================================
@@ -161,7 +159,7 @@ def etiquetar_vuelos_gdp(
     df_vuelos: pd.DataFrame,
     h_start: int,
     radius_km: int  = CFG.GDP_RADIUS_KM,
-    h_freeze_offset: int = CFG.H_FILE_OFFSET,
+    h_noreg: int = CFG.H_FILE_OFFSET,
 ) -> pd.DataFrame:
     """
     Clasifica cada vuelo en una de estas cuatro categorías de regulación:
@@ -178,9 +176,9 @@ def etiquetar_vuelos_gdp(
         Un vuelo intercontinental que ya despegó NO se etiqueta como AIRBORNE,
         sino como INTERNATIONAL. La categoría ECAC tiene prioridad.
 
-    FREEZE HORIZON (H_FREEZE_OFFSET):
+    H_NOREG:
         El GDP no puede notificar a un avión que ya está en el aire.
-        Si un vuelo despegó más de H_FREEZE_OFFSET minutos antes de H_START,
+        Si un vuelo despegó más de H_NOREG minutos antes de H_START,
         se considera "airborne" a efectos del GDP.
         Valor estándar Eurocontrol: 150 minutos (2.5 horas).
 
@@ -188,7 +186,7 @@ def etiquetar_vuelos_gdp(
         df_vuelos:       Tabla de vuelos con is_ecac, minutes_etd, distancia_km.
         h_start:         Minuto de inicio del GDP (360 = 06:00).
         radius_km:       Radio máximo de cobertura del GDP en km (3000 km).
-        h_freeze_offset: Minutos antes de H_START.
+        H_NOREG:         Minutos antes de H_START.
 
     Returns:
         Copia de df_vuelos con 4 columnas nuevas:
@@ -198,7 +196,7 @@ def etiquetar_vuelos_gdp(
 
     # vuelos que despegaron antes de este minuto
     # ya no pueden recibir un nuevo CTOT (hora de salida asignada).
-    t_file = h_start - h_freeze_offset
+    t_file = h_start - h_noreg
 
     # --- Tres checks (True/False) por vuelo ---
 
@@ -218,17 +216,16 @@ def etiquetar_vuelos_gdp(
     # -------------------------------------------------------------------------
     # Asignación de etiqueta final usando np.select()
     #
-    # np.select() es el equivalente vectorizado de un if-elif-else aplicado
+    # np.select() es el equivalente con vectores de un if-elif-else aplicado
     # a toda la columna de una vez.
-    # Evalúa las condiciones en orden: la PRIMERA que sea True gana.
+    # Evalúa las condiciones en orden: la primera que sea True gana.
     # Si ninguna condición es True, asigna el valor predeterminado.
     #
-    # Equivalente en lenguaje natural:
-    #   SI es candidato GDP        → FS_CANDIDATE
-    #   SINO SI no es ECAC         → FS_INTERNATIONAL
-    #   SINO SI ya despegó         → FS_AIRBORNE
-    #   SINO SI fuera del radio    → FS_DISTANCE
-    #   EN CUALQUIER OTRO CASO     → 'UNKNOWN' --> solo saldra si hubiese algun error
+    #   IF es candidato GDP     → FS_CANDIDATE
+    #   ELIF no es ECAC         → FS_INTERNATIONAL
+    #   ELIF ya despegó         → FS_AIRBORNE
+    #   ELIF fuera del radio    → FS_DISTANCE
+    #   ELSE                    → 'UNKNOWN' --> solo saldra si hubiese algun error
     # -------------------------------------------------------------------------
     condiciones = [
         df['is_gpd_candidate'],   # Condición 1: es regulable
@@ -246,7 +243,6 @@ def etiquetar_vuelos_gdp(
 
     return df
 
-
 # =============================================================================
 # 3. ASIGNACIÓN DE SLOTS — ALGORITMO RBS (Ration-By-Schedule)
 # =============================================================================
@@ -257,12 +253,12 @@ def asignar_slots_rbs(
 ) -> pd.DataFrame:
     """
     Asigna un slot de aterrizaje a cada vuelo usando el algoritmo RBS
-    (Ration-By-Schedule) de Eurocontrol.
+    (Ration-By-Schedule).
 
     QUÉ ES RBS:
         RBS es el algoritmo oficial de Eurocontrol para asignar slots en un GDP.
-        La idea central es: "el que primero tenía previsto llegar, primero aterriza".
-        Es un sistema FIFO (First In, First Out) aplicado a los slots disponibles.
+        La idea central es: el primero que llega, el priemro que aterriza.
+        Es un sistema FIFO aplicado a los slots disponibles.
 
     LÓGICA EN DOS PASADAS:
         PASADA 1 — Vuelos EXENTOS (airborne, internacionales, lejanos):
@@ -280,7 +276,7 @@ def asignar_slots_rbs(
         de un exento que llega en ese mismo minuto. Los exentos tienen prioridad
         operacional porque ya no tienen margen de maniobra.
 
-    Args:
+    inputs:
         df_regulados: Tabla de vuelos con 'flight_status' y 'minutes_eta'.
         df_slots:     Tabla de slots disponibles con 'slot_start_min' y 'occupied'.
 
@@ -301,7 +297,7 @@ def asignar_slots_rbs(
         # Procesamos los vuelos de este grupo en orden de ETA (más temprano primero)
         for indice_vuelo, datos_vuelo in df[seleccion].sort_values('minutes_eta').iterrows():
 
-            # Buscamos slots que: (1) empiecen >= ETA del vuelo y (2) estén libres
+            # Buscamos slots que: empiecen >= ETA del vuelo y estén libres
             slots_disponibles = df_slots[
                 (df_slots['slot_start_min'] >= datos_vuelo['minutes_eta'])
                 & (~df_slots['occupied'])  # ~ invierte: occupied=False → disponible
@@ -320,7 +316,6 @@ def asignar_slots_rbs(
 
     return df
 
-
 # =============================================================================
 # 4. CÁLCULO DE RETRASOS — ¿CUÁNTO RETRASA CADA VUELO Y DÓNDE ESPERA?
 # =============================================================================
@@ -333,20 +328,15 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
         air_delay    = retraso absorbido EN EL AIRE   (solo vuelos EXENTOS)
         ground_delay = retraso absorbido EN TIERRA    (solo vuelos CANDIDATOS GDP)
 
-    POR QUÉ ESTA SEPARACIÓN:
+    PORQUE SEPARAMOS:
         Los vuelos EXENTOS no podemos regularlos: si llegan tarde, es retraso
         en el aire (holding, etc.) que no controlamos.
         Los vuelos CANDIDATOS GDP esperan en origen antes de despegar: su
-        retraso es en tierra, que es mucho más barato y ecológico.
+        retraso es en tierra, que es mucho más barato.
 
         La suma siempre se cumple: air_delay + ground_delay = total_delay
 
-    NOTA SOBRE np.where():
-        np.where(condición, valor_si_True, valor_si_False) es el equivalente
-        vectorizado de: "para cada fila, si condición → ponle este valor, si no → este otro".
-        Es mucho más rápido que un bucle for sobre las filas del DataFrame.
-
-    Args:
+    inputs:
         df_res: Tabla con 'assigned_slot', 'minutes_eta' y 'flight_status'.
 
     Returns:
@@ -354,15 +344,13 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
     """
     df = df_res.copy()
 
-    # Retraso total = hora de aterrizaje asignada - hora de aterrizaje prevista.
-    # .clip(lower=0) elimina valores negativos: si un avión llega antes de su ETA,
-    # su retraso es 0, no negativo.
+    # Retraso total = hora asignada - hora prevista.
     df['total_delay'] = (df['assigned_slot'] - df['minutes_eta']).clip(lower=0)
 
     # Identificamos qué vuelos son candidatos GDP (True) y cuáles son exentos (False)
     es_candidato_gdp = df['flight_status'] == FS_CANDIDATE
 
-    # Vuelos EXENTOS (no candidatos): su retraso es en el aire
+    # Vuelos EXENTOS: su retraso es en el aire
     # Vuelos CANDIDATOS: su retraso es en tierra
     df['air_delay']    = np.where(~es_candidato_gdp, df['total_delay'], 0)
     df['ground_delay'] = np.where( es_candidato_gdp, df['total_delay'], 0)
@@ -370,7 +358,7 @@ def calcular_delays(df_res: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def resolve_ghp_intlinprog(df_vuelos, slots, r_f=1):
-    #resolver GHP como programacion lineal de enteros
+    #resolver GHP como programacion lineal de ints
     #objective function = min sum(coste*delay)
 
     vuelos = df_vuelos.copy().reset_index()
@@ -427,8 +415,6 @@ def resolve_ghp_intlinprog(df_vuelos, slots, r_f=1):
     else:
         raise ValueError("no se encontro solucion")
 
-
-
 # =============================================================================
 # 5. RETRASO MÍNIMO TEÓRICO — ¿CUÁL ES EL MÍNIMO INEVITABLE?
 # =============================================================================
@@ -436,23 +422,22 @@ def resolve_ghp_intlinprog(df_vuelos, slots, r_f=1):
 def calcular_retraso_minimo_newell(timeline: pd.DataFrame) -> float:
     """
     Calcula el retraso mínimo teórico que impone la restricción de capacidad,
-    independientemente del algoritmo de asignación que se use.
+    independientemente del algoritmo que se use.
 
     QUÉ SIGNIFICA "MÍNIMO TEÓRICO":
-        Cuando hay LVP, el aeropuerto no puede aceptar todos los vuelos.
-        Aunque usáramos el algoritmo perfecto (ILP, RBS u otro), siempre habrá
-        un retraso mínimo que no se puede evitar — es consecuencia directa
+        El aeropuerto no puede aceptar todos los vuelos, siempre habrá
+        un retraso mínimo que no se puede evitar. Es consecuencia directa
         de la diferencia entre oferta (capacidad) y demanda (vuelos).
 
         Este valor es el ÁREA entre las dos curvas del diagrama de Newell.
         Si el área es X minutos, significa que como mínimo X minutos de retraso
         se van a acumular en el sistema, sin importar cómo se distribuyan.
 
-    CÓMO SE CALCULA:
+    COMO CALCULA:
         En cada minuto, la cola = demanda_acumulada - capacidad_acumulada.
         Sumamos la cola de todos los minutos → retraso mínimo total acumulado.
 
-    Args:
+    inputs:
         timeline: DataFrame con columnas 'demand_accum' y 'capacity_accum'.
 
     Returns:
@@ -461,27 +446,20 @@ def calcular_retraso_minimo_newell(timeline: pd.DataFrame) -> float:
     cola_por_minuto = (timeline['demand_accum'] - timeline['capacity_accum']).clip(lower=0)
     return cola_por_minuto.sum()
 
-
 # =============================================================================
-# 6. KPIs ECONÓMICOS Y AMBIENTALES — FUENTE ÚNICA DE VERDAD
+# 6. KPIs ECONÓMICOS Y AMBIENTALES
 # =============================================================================
 
 def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     """
     Calcula todos los KPIs de coste y CO2 en un único lugar.
 
-    POR QUÉ "FUENTE ÚNICA DE VERDAD":
-        Los KPIs se usan en tres sitios: los gráficos, el Excel y el análisis
-        de sensibilidad. Si los calculáramos en cada sitio por separado, un
-        cambio en la fórmula habría que aplicarlo en tres sitios.
-        Al centralizar aquí, todos usan siempre los mismos cálculos.
-
     LÓGICA DE COSTES:
-        Escenario Sin GDP (FIFO):  todo el retraso ocurre en el aire (caro).
-            coste_base = total_delay × COST_AIR_MIN
+        Escenario Sin GDP (FIFO):  todo el retraso ocurre en el aire (es mas caro).
+            coste_base = total_delay * COST_AIR_MIN
 
         Escenario Con GDP (RBS):   el retraso se separa en aire y tierra.
-            coste_gdp = air_delay × COST_AIR_MIN + ground_delay × COST_GND_MIN
+            coste_gdp = air_delay * COST_AIR_MIN + ground_delay * COST_GND_MIN
             Como COST_GND_MIN << COST_AIR_MIN, el GDP ahorra dinero.
 
     LÓGICA DE CO2 — Modelo Delgado et al. (2025):
@@ -492,14 +470,14 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
         El retraso en tierra NO añade CO2 (el avión está parado, motor apagado).
 
         La proporción de CO2 extra es lineal con el retraso:
-            CO2_extra = co2_kg_vuelo × (retraso_en_aire / duración_del_vuelo)
+            CO2_extra = co2_kg_vuelo * (retraso_en_aire / duración_del_vuelo)
 
     RETRASO IRRECUPERABLE:
         Si el GDP se cancela justo en H_START, los vuelos EXEMPT AIRBORNE
         ya no pueden ser retrasados en tierra — están en el aire.
         Su retraso ya está "comprometido" y no puede evitarse.
 
-    Args:
+    inputs:
         df_res: Tabla con total_delay, air_delay, ground_delay,
                 co2_kg_vuelo (del modelo Delgado) y duracion_vuelo_min.
 
@@ -516,7 +494,6 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     coste_con_gdp = retraso_aire  * COST_AIR_MIN + retraso_tierra * COST_GND_MIN
 
     # --- CO2 usando el modelo proporcional de Delgado et al. (2025) ---
-    # .clip(lower=1) evita división por cero si duracion_vuelo_min = 0
     duracion_vuelo = df_res['duracion_vuelo_min'].clip(lower=1)
     co2_base_vuelo = df_res['co2_kg_vuelo']
 
@@ -530,8 +507,8 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     co2_extra_aire   = (co2_base_vuelo * (df_res['air_delay']   / duracion_vuelo)).sum()
     co2_extra_tierra = (co2_base_vuelo * (df_res['ground_delay'] / duracion_vuelo)).sum()
 
-    # --- Retraso Irrecuperable (Unrecoverable Delay) ---
-    # Asumimos que la previsión meteorológica falla y el GDP se cancela 
+    # --- Unrecoverable Delay ---
+    # Asumimos que GDP se cancela 
     # exactamente en H_START. ¿Cuánto tiempo han perdido ya los aviones en tierra?
     
     # CTD (Calculated Take-Off Time) = Hora real a la que van a despegar con el retraso
@@ -554,9 +531,9 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
     unrecoverable[caso2] = df_res.loc[caso2, 'ground_delay']
     
     # CASO 3: ETD < H_start < CTD
-    # El avión debía haber despegado, pero el GDP lo retuvo. En el momento
-    # H_start se cancela el GDP y le decimos "¡despega ya!".
-    # El tiempo que ha perdido tontamente es (H_start - ETD).
+    # El avión debía haber despegado, pero el GDP lo retiene. En el momento
+    # H_start se cancela el GDP y le decimos despega ya.
+    # El tiempo que ha perdido para nada es (H_start - ETD).
     caso3 = (df_res['minutes_etd'] < h_start) & (ctd > h_start)
     unrecoverable[caso3] = h_start - df_res.loc[caso3, 'minutes_etd']
     
@@ -579,7 +556,6 @@ def calcular_kpis_economicos(df_res: pd.DataFrame) -> dict:
         'unrecoverable_delay': round(retraso_irrecuperable, 2),
     }
 
-
 # =============================================================================
 # 7. ORQUESTADOR — CONECTA TODOS LOS PASOS EN EL ORDEN CORRECTO
 # =============================================================================
@@ -589,17 +565,10 @@ def ejecutar_nucleo_gdp(
     params: dict,
     radius_km: int       = CFG.GDP_RADIUS_KM,
     h_file_offset: int = CFG.H_FILE_OFFSET,
-    run_ghp: bool        = False  # <--- NUEVO PARÁMETRO (por defecto no se ejecuta)
+    run_ghp: bool        = False
 ) -> dict:
     """
     Orquestador de la Fase 2: ejecuta los 5 pasos del GDP en orden.
-
-    Esta función NO tiene lógica propia — solo llama a las funciones
-    anteriores en el orden correcto y empaqueta los resultados.
-
-    También acepta parámetros opcionales de radio y freeze horizon para
-    que lib_sensitivity.py pueda llamarla con distintos valores sin
-    duplicar código.
 
     FLUJO:
         Paso 1 → simular_curvas_newell()  → ¿Cuándo colapsa el aeropuerto?
@@ -608,11 +577,11 @@ def ejecutar_nucleo_gdp(
         Paso 4 → asignar_slots_rbs()      → ¿A qué slot va cada vuelo?
         Paso 5 → calcular_delays()        → ¿Cuánto retrasa y dónde espera?
 
-    Args:
+    inputs:
         df_vuelos:       Tabla de vuelos limpia de la Fase 1.
         params:          Parámetros del GDP (H_START, H_END, AAR, PAAR...).
         radius_km:       Radio de cobertura del GDP. Por defecto: config.py.
-        h_freeze_offset: Ventana de congelación CTOT. Por defecto: config.py.
+        h_noreg: Ventana de congelación CTOT. Por defecto: config.py.
 
     Returns:
         Diccionario con todos los resultados que main.py necesita para
@@ -626,10 +595,10 @@ def ejecutar_nucleo_gdp(
         df_vuelos,
         h_start=params['H_START'],
         radius_km=radius_km,
-        h_freeze_offset=h_file_offset,
+        h_noreg=h_file_offset,
     )
 
-    # PASO 3: Generar la rejilla de slots disponibles
+    # PASO 3: Generar la matriz de slots disponibles
     # Empezamos en H_START y añadimos un slot cada SLOT_RED minutos mientras dura el GDP,
     # luego cada SLOT_NOM minutos hasta que la cola se disuelve (h_noreg).
     # El +1000 es un margen de seguridad: generamos slots hasta bien pasado h_noreg
@@ -649,12 +618,12 @@ def ejecutar_nucleo_gdp(
         'flight_id':      None,    # Se rellenará en el Paso 4
     })
 
- # PASO 4: Asignar slots usando el algoritmo RBS (Escenario Base / Original)
+ # PASO 4: Asignar slots usando el algoritmo RBS
     df_en_ventana = df_vuelos_etiquetados[
         df_vuelos_etiquetados['minutes_eta'] >= params['H_START']
     ].copy()
 
-    # Calculamos SIEMPRE el RBS (es instantáneo y lo necesitamos para el reporte)
+    # Calculamos SIEMPRE el RBS
     df_slots_original = df_slots.copy()
     df_resultado_original = asignar_slots_rbs(df_en_ventana, df_slots_original)
     df_resultado_original = calcular_delays(df_resultado_original)
@@ -703,7 +672,7 @@ def ejecutar_nucleo_gdp(
         'vuelos_asignados': df_resultado_original, 
         'slots': df_slots_original,
         'vuelos_comprimidos': df_resultado_comprimido,
-        'vuelos_ghp': df_resultado_ghp, # Devolvemos esto por si quieres graficarlo
+        'vuelos_ghp': df_resultado_ghp, # para si luego hacemos un grafico
         'vuelos_crudos': df_vuelos,
         'timeline': timeline,
         'h_noreg': h_noreg,

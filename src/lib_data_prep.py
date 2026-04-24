@@ -2,10 +2,10 @@
 # src/lib_data_prep.py
 # FASE 1: Carga, limpieza y enriquecimiento de los datos de vuelo.
 #
-# Este módulo transforma los CSVs crudos en una tabla limpia y enriquecida
-# lista para que el motor GDP (Fase 2) la procese.
+# Transforma los CSVs en una tabla limpia
+# lista para que el motor GDP la procese.
 #
-# FLUJO COMPLETO (en orden de ejecución dentro de preparar_vuelos):
+# FLUJO (en orden de ejecución dentro de preparar_vuelos):
 #   Paso 1 → Leer los dos CSVs (vuelos del día + catálogo de flota)
 #   Paso 2 → Filtrar solo vuelos que aterrizan en LEBL
 #   Paso 3 → Unir con el catálogo de flota (categoría + nº asientos)
@@ -15,40 +15,32 @@
 #   Paso 7 → Calcular las emisiones CO2 de cada vuelo 
 #
 # SEPARACIÓN:
-#   Este módulo SOLO prepara datos. No ejecuta el GDP, no genera gráficos,
-#   no exporta Excel. Solo entrega una tabla limpia.
+#   SOLO prepara datos, entrega una tabla limpia.
 # =============================================================================
 
 import os
 import numpy as np
 import pandas as pd
 
-# Importamos las constantes desde config.py — si cambia una velocidad o un
-# prefijo ECAC, solo hay que tocar config.py, no este archivo.
+# Importamos las constantes desde config.py, si cambia una velocidad o un
+# ECAC, solo hay que tocar config.py.
 from config import ECAC_PREFIXES, VELOCIDAD_KNOTS
 
-
 # =============================================================================
-# FUNCIÓN AUXILIAR: CONVERTIR TIEMPO A MINUTOS
+# AUXILIAR: CONVERTIR TIEMPO A MINUTOS
 # =============================================================================
 
 def parse_time_to_minutes(time_str: str) -> float:
     """
     Convierte un string de tiempo en minutos decimales desde medianoche.
 
-    POR QUÉ CONVERTIR A MINUTOS:
-        "¿Cuántos minutos de retraso?",
-        "¿Qué vuelo llega antes?". Es mucho más sencillo hacer estas operaciones
-        con números que con strings.
-        La medianoche (00:00) = minuto 0. Las 06:00 = minuto 360. Las 23:59 = minuto 1439.
-
-    Args:
+    inputs:
         time_str: El string de tiempo a convertir (puede venir del CSV como NaN).
 
     Returns:
         Los minutos totales como número decimal. Devuelve 0.0 si el valor es inválido.
     """
-    # Si la celda del CSV está vacía, pandas la lee como NaN (Not a Number).
+    # Si la celda del CSV está vacía, pandas la lee como NaN.
     # pd.isna() detecta este caso y devolvemos 0 para no romper los cálculos.
     if pd.isna(time_str):
         return 0.0
@@ -73,10 +65,9 @@ def parse_time_to_minutes(time_str: str) -> float:
 
     except (ValueError, AttributeError):
         # ValueError:    el string contiene texto no numérico (ej: "N/A", "??")
-        # AttributeError: time_str es un tipo que no tiene .split() (muy raro)
+        # AttributeError: time_str es un tipo que no tiene .split()
         # En ambos casos devolvemos 0.0 para no interrumpir el procesamiento.
         return 0.0
-
 
 # =============================================================================
 # FUNCIÓN PRINCIPAL: CARGA Y ENRIQUECIMIENTO DE VUELOS
@@ -84,31 +75,21 @@ def parse_time_to_minutes(time_str: str) -> float:
 
 def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     """
-    Pipeline completo de preparación de datos: desde los CSVs crudos hasta
-    una tabla lista para el motor GDP.
-
-    PIPELINE DE DATOS:
-        Una secuencia de pasos donde cada uno transforma la tabla y la pasa
-        al siguiente. Al final de todos los pasos, la tabla está "enriquecida"
-        con toda la información que el GDP necesita.
-
-    QUÉ DEVUELVE:
+    returns:
         Una tabla con una fila por vuelo, ordenada por ETA,
-        con columnas como: distancia_km, is_ecac, co2_kg_vuelo...
+        columnas: distancia_km, is_ecac, co2_kg_vuelo...
+        DataFrame limpio y enriquecido, ordenado por ETA, listo para el GDP.
 
-    Args:
+    inputs:
         path_vuelos: Ruta al CSV con el plan de vuelos del día (LEBL_10AUG2025.csv).
         path_flota:  Ruta al CSV con la clasificación de la flota (fleet_cat_seat.csv).
-
-    Returns:
-        DataFrame limpio y enriquecido, ordenado por ETA, listo para el GDP.
     """
     print("   -> Leyendo datos y calculando distancias cinemáticas...")
 
     # =========================================================================
     # PASO 1: LEER LOS DOS CSVs
     # =========================================================================
-    # sep=';' porque los CSVs de aviación europeos usan punto y coma, no coma.
+    # separador=';' 
     df_vuelos = pd.read_csv(path_vuelos, sep=';')
     df_flota  = pd.read_csv(path_flota,  sep=';')
 
@@ -118,20 +99,15 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # Nos quedamos únicamente con vuelos que ATERRIZAN en LEBL (Barcelona).
     # Excluimos vuelos LEBL→LEBL (circuitos de prueba, no nos interesan).
     #
-    # NOTA sobre .copy():
-    #   Cuando filtramos un DataFrame, pandas crea una "vista" del original,
-    #   no una copia independiente. Si luego modificamos la vista, pandas lanza
-    #   un warning "SettingWithCopyWarning". .copy() crea una copia real y
-    #   evita ese warning.
     df_vuelos = df_vuelos[
         (df_vuelos['ADES'] == 'LEBL') &   # Destino = Barcelona
-        (df_vuelos['ADEP'] != 'LEBL')      # Origen ≠ Barcelona (excluir locales)
+        (df_vuelos['ADEP'] != 'LEBL')      # Origen != Barcelona (excluir locales)
     ].copy()
 
     # =========================================================================
-    # PASO 3: UNIR CON EL CATÁLOGO DE FLOTA
+    # PASO 3: UNIR CON LA LISTA
     # =========================================================================
-    # El catálogo de flota nos da dos datos por tipo de avión (ATYP):
+    # Nos da dos datos por tipo de avión (ATYP):
     #   - recat:          categoría (A, B, C, D, E, F)
     #                     usada para calcular la velocidad de crucero
     #   - size_seats_avg: número medio de asientos
@@ -142,7 +118,7 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     #   how='left' significa que nos quedamos con TODOS los vuelos aunque su tipo
     #   de avión no aparezca en el catálogo (en ese caso, las columnas quedan NaN).
 
-    # Limpieza previa del catálogo: eliminar espacios en los nombres de columna
+    # Limpieza previa: eliminar espacios en los nombres de columna
     # y renombrar la columna 'f' a 'ATYP' para que coincida con df_vuelos.
     df_flota.columns = df_flota.columns.str.strip()
     df_flota = df_flota.rename(columns={'f': 'ATYP'})
@@ -159,7 +135,6 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # =========================================================================
     # Convertimos las columnas de tiempo de strings "HH:MM" a números.
     # .apply(función) aplica la función a cada fila de la columna.
-    # Es equivalente a un bucle for, pero mucho más eficiente.
     df_vuelos['minutes_eta'] = df_vuelos['ETA'].apply(parse_time_to_minutes)  # Llegada prevista
     df_vuelos['minutes_etd'] = df_vuelos['ETD'].apply(parse_time_to_minutes)  # Despegue previsto
     df_vuelos['minutes_tt']  = df_vuelos['TT'].apply(parse_time_to_minutes)   # Taxi time (rodaje)
@@ -167,14 +142,14 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # =========================================================================
     # PASO 5: MARCAR ORIGEN ECAC Y EXTRAER CÓDIGO DE AEROLÍNEA
     # =========================================================================
-    # is_ecac: ¿El aeropuerto de origen está en el espacio aéreo europeo (ECAC)?
-    #   - True  → el vuelo PUEDE recibir una restricción GDP (está bajo el rango ECAC)
+    # is_ecac: El aeropuerto de origen está en el espacio aéreo europeo (ECAC)
+    #   - True  → el vuelo puede recibir una restricción GDP (está bajo el rango ECAC)
     #   - False → vuelo intercontinental, exento de regulación GDP
     #
     # Los prefijos ECAC son los primeros 2 caracteres del código OACI del aeropuerto.
     #
-    # .str.startswith(tupla) comprueba si el string empieza por alguno de los prefijos
-    # de la tupla. Es más eficiente que un bucle for sobre todos los prefijos.
+    # .str.startswith(vec) comprueba si el string empieza por alguno de los prefijos
+    # del vector
     df_vuelos['is_ecac'] = df_vuelos['ADEP'].astype(str).str.startswith(ECAC_PREFIXES)
 
     # airline: Los 3 primeros caracteres del indicativo de vuelo = código ICAO aerolínea.
@@ -195,13 +170,13 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     #
     # CORRECCIÓN PARA VUELOS QUE CRUZAN MEDIANOCHE:
     #   Si un vuelo despega a las 23:30 (=1410 min) y llega a las 01:00 (=60 min),
-    #   la resta daría 60 - 1410 = -1350 min (¡negativo!).
+    #   la resta daría 60 - 1410 = -1350 min (quedaria negativo).
     #   La solución es sumar 1440 min (= 24 horas) cuando el resultado es negativo.
 
     duracion_total_min = df_vuelos['minutes_eta'] - df_vuelos['minutes_etd']
 
-    # np.where(condición, valor_si_True, valor_si_False) es el equivalente
-    # vectorizado de: "para cada fila, si la duración es negativa, súmale 1440"
+    # np.where() es el equivalente
+    # usando vectores de: para cada fila, si la duración es negativa, sumar 1440
     duracion_total_min = np.where(
         duracion_total_min < 0,
         duracion_total_min + 1440,  # Corrección para vuelos que cruzan medianoche
@@ -211,13 +186,13 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # Tiempo real en el aire en horas (sin taxi ni margen de maniobra)
     tiempo_en_aire_horas = (duracion_total_min - df_vuelos['minutes_tt'] - 5.5) / 60.0
 
-    # Velocidad de crucero según categoría (kt).
-    # .map(diccionario) sustituye cada valor de la columna por su valor en el diccionario.
-    # .fillna(440) asigna 440 kt si la categoría no está en el diccionario.
+    # Velocidad según categoría (kt).
+    # .map() sustituye cada valor de la columna por su valor en el diccionario.
+    # .fillna(440) asigna 440 kt (la que hemos elegido de media) si la categoría no está en el diccionario.
     velocidad_crucero_kt = df_vuelos['recat'].map(VELOCIDAD_KNOTS).fillna(440)
 
-    # Distancia en km. 1 kt × 1 hora = 1 milla náutica = 1.852 km.
-    # .clip(lower=0) elimina distancias negativas que pueden aparecer por datos sucios.
+    # Distancia en km. 1 kt × 1 hora = 1 NM = 1.852 km.
+    # .clip(lower=0) elimina distancias negativas que pueden aparecer por datos mal procesados.
     df_vuelos['distancia_km'] = (tiempo_en_aire_horas * velocidad_crucero_kt * 1.852).clip(lower=0)
 
     # =========================================================================
@@ -269,8 +244,8 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
         co2_total_kg = co2_por_ask * distancia * asientos / 1000
         return round(co2_total_kg, 2)
 
-    # .apply(función, axis=1) aplica la función a cada FILA (axis=1) del DataFrame.
-    # Es equivalente a un bucle for sobre las filas, pero integrado en pandas.
+    # .apply(f, axis=1) aplica la función a cada FILA (axis=1) del DataFrame.
+    # Es equivalente a un bucle for sobre las filas
     df_vuelos['co2_kg_vuelo'] = df_vuelos.apply(_calcular_co2_vuelo, axis=1)
 
     # Guardamos la duración del vuelo como columna porque la necesita
@@ -285,11 +260,9 @@ def preparar_vuelos(path_vuelos: str, path_flota: str) -> pd.DataFrame:
     # =========================================================================
     # PASO FINAL: ORDENAR POR ETA Y DEVOLVER
     # =========================================================================
-    # El motor GDP procesa vuelos en orden de llegada (el primero en llegar,
-    # primero en ser asignado a un slot). Entregamos la tabla ya ordenada.
+    # El motor GDP procesa vuelos en orden de llegada. Entregamos la tabla ya ordenada.
     # reset_index(drop=True) renumera las filas desde 0 después del filtrado.
     return df_vuelos.sort_values('minutes_eta').reset_index(drop=True)
-
 
 # =============================================================================
 # MODO DEBUG — Ejecutar directamente para probar este módulo de forma aislada.

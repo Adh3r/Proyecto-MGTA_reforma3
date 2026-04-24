@@ -346,7 +346,7 @@ def _sheet_analisis_retrasos(wb, df_res, df_slots):
     n4 = int((delay>60).sum())
 
     metricas = [
-        '-- ESTADISTICAS DESCRIPTIVAS --',
+        '-- ESTADISTICAS --',
         'Total vuelos en ventana GDP','Vuelos SIN retraso','Vuelos CON retraso',
         'Retraso minimo (entre retrasados)','Retraso medio - todos los vuelos',
         'Retraso medio - solo vuelos retrasados','Mediana del retraso',

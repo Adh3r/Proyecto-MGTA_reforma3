@@ -8,10 +8,10 @@ from config import FS_CANDIDATE
 
 def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: int = 12) -> pd.DataFrame:
     """
-    Aplica un corte a los vuelos con más retraso y comprime el resto de la 
-    programación respetando la aerolinea de los slots y aplicando compresión global si la aerolínea no puede usar el hueco.
+    Aplica un corte a los vuelos con más retraso y comprime el resto
+    respetando la aerolinea de los slots y aplicando compresión global si la aerolínea no puede usar el hueco.
 
-    Args:
+    inputs :
         df_vuelos_asignados: DataFrame resultante de asignar_slots_rbs() o calcular_delays()
         num_penalizados: Número de vuelos a los que se les quitará el slot.
 
@@ -44,7 +44,7 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
     # Ordenamos la lista de huecos 
     slots_abiertos = sorted(slots_abiertos, key=lambda x: x['time'])
 
-    # 3. ALGORITMO DE COMPRESIÓN 
+    # ALGORITMO DE COMPRESIÓN 
     while slots_abiertos:
         # Cogemos el hueco más temprano que esté libre
         slot_actual = slots_abiertos.pop(0)
@@ -87,7 +87,7 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
         df.at[vuelo_seleccionado_idx, 'assigned_slot'] = t_slot
 
         # El hueco que este vuelo acaba de dejar atrás entra en la bolsa de slots
-        # abiertos, y pertenece a la aerolínea que lo acaba de dejar.
+        # abiertos y pertenece a la aerolínea que lo acaba de dejar.
         slots_abiertos.append({'time': slot_dejado_libre, 'airline': aerolinea_que_deja_slot})
         
         # Reordenamos la lista de huecos para asegurar que siempre atacamos el más temprano

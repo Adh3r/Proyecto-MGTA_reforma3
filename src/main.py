@@ -79,7 +79,7 @@ def ejecutar_proyecto_completo() -> None:
     # =========================================================================
     print("\n[FASE 2] Ejecutando motor de simulación GDP (Algoritmo RBS)...")
 
-    resultados = gdp.ejecutar_nucleo_gdp(df_vuelos, params, run_ghp=True)
+    resultados = gdp.ejecutar_nucleo_gdp(df_vuelos, params, run_ghp=False)
 
     df_final = resultados['vuelos_asignados']
     df_slots = resultados['slots']
