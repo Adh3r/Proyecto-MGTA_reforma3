@@ -7,45 +7,9 @@
 #   A diferencia del RBS (FIFO), el LP puede priorizar vuelos más costosos
 #   asignándoles slots más tempranos aunque lleguen más tarde.
 #
-# FORMULACIÓN (Ball, 2007):
-#   Variables:  x_{f,t} ∈ {0,1}  →  1 si el vuelo f se asigna al slot t
-#   Objetivo:   min Σ_f Σ_t  c_{f,t} · x_{f,t}
-#   Restricciones:
-#     (1) Capacidad:  Σ_f x_{f,t} ≤ b_t   para todo t  (un slot = un avión)
-#     (2) Asignación: Σ_{t≥ETA(f)} x_{f,t} = 1  para todo f  (cada vuelo llega una vez)
-#     (3) No antes de ETA: la restricción (2) empieza desde t=ETA(f)
-#     (4) Exentos: tienen fijado su slot, no pueden mejorar su posición
-#     (5) Cap air delay: exentos no pueden tener más de MAX_AIR_DELAY minutos
-#
-# FUNCIONES DE COSTE IMPLEMENTADAS:
-#   - Task 1 (validación): c_{f,t} = 1 · (t - ETA(f))  →  r_f = 1 para todos
-#   - Task 2 (emisiones):  c_{f,t} = emissions_per_min_f · (t - ETA(f))
-#   - Task 3 (coste real): c_{f,t} = r_f(t) · (t - ETA(f))
-#       donde r_f(t) depende de:
-#         a) Pasajeros × load factor (conexiones perdidas si delay > umbral)
-#         b) Turn-around time (reactionary delay si delay > TAT disponible)
-#
-# HIPÓTESIS (justificadas en el informe):
-#   - Load factor europeo: 83,7% (IATA Annual Review 2025, dato para Europa)
-#   - Conexiones perdidas: 20% de pasajeros son de conexión en LEBL
-#     (Fuente: AENA estadísticas LEBL 2024 — LEBL tiene ~18-22% transit PAX)
-#   - Coste por pasajero perdiendo conexión: 200 EUR
-#     (EC 261/2004 compensación media + re-routing; Cook & Tanner 2015 soft costs)
-#   - Turn-around mínimo (TAT):
-#       narrow 45 min, wide 80 min
-#       (Eurocontrol Standard Inputs for Economic Analyses, §18, datos CODA ECAC)
-#   - Coste reactionary: COST_AIR_MIN × 1.3 por efecto cascada
-#     (Cook et al. 2015, EUROCONTROL Cost of Delay v4.1, Table 19)
-#   - MAX_AIR_DELAY: 90 min (hipótesis conservadora; vuelos en holding >90 min
-#     se desvían a alternativo en la mayoría de escenarios operativos europeos)
-#   - Granularidad de slots: 1 minuto (igual que WP2 para comparabilidad)
-#
-# NOTA SOBRE EMISIONES EN HOLDING (FIX #1):
-#   La tasa de CO₂/min usada en Task 2 se obtiene dividiendo el CO₂ total
-#   del vuelo por su duración planificada (tasa media crucero).  Esto
-#   sobreestima las emisiones reales del holding, que ocurre a menor potencia.
-#   Se acepta como hipótesis conservadora documentada.  El mismo valor se usa
-#   en los KPIs (calcular_kpis_ghp) para mantener coherencia con el objetivo LP.
+# VERSIÓN COMBINADA:
+#   Integra la estructura optimizada y segura (manejo de excepciones) con la 
+#   lógica avanzada de emisiones (diferenciación APU en tierra vs. Crucero en aire).
 # =============================================================================
 
 import numpy as np
@@ -66,75 +30,54 @@ from emissions_fuel_model import compute_co2_ask
 MAX_AIR_DELAY_MIN = 90
 
 # Load factor europeo (fracción de asientos ocupados).
-# Fuente: IATA Annual Review 2025, promedio europeo 2025: 83,7%
 LOAD_FACTOR_EU = 0.837
 
 # Fracción de pasajeros de conexión en LEBL.
-# Fuente: AENA estadísticas LEBL 2024 — tráfico de tránsito ~18-22% en LEBL.
-# Se adopta 0.20 como valor central del rango observado.
 FRAC_CONNECTING_PAX = 0.20
 
 # Coste por pasajero que pierde su conexión (EUR).
-# Incluye: EC261/2004 compensación media (~250-400 EUR ponderado por distancia)
-# + re-routing + soft cost reputacional (Cook & Tanner 2015, Table 3).
-# 200 EUR es una estimación conservadora de orden de magnitud.
 COST_LOST_CONNECTION_EUR = 200
 
 # Turn-around time mínimo por categoría (minutos).
-# Fuente: Eurocontrol Standard Inputs for Economic Analyses, §18
-#   "Turnaround time" — datos CODA (Central Office for Delay Analysis),
-#   percentiles bajos del turnaround real en ECAC por categoría de aeronave.
-#   https://ansperformance.eu/economics/cba/standard-inputs/latest/chapters/turnaround_time.html
 TAT_MIN = {
-    'narrow':  45,   # A320, B737 y similares (RECAT D, E, F) — mínimo proceso Medium
-    'wide':    80,   # A330, B777 y similares (RECAT A, B, C) — mínimo proceso Heavy
+    'narrow':  45,   # A320, B737 y similares (RECAT D, E, F)
+    'wide':    80,   # A330, B777 y similares (RECAT A, B, C)
 }
 
 # Multiplicador de coste para reactionary delay.
-# Fuente: Cook et al. 2015, EUROCONTROL Cost of Delay v4.1, Table 19
-#   "Basic reactionary multipliers by delay magnitude".
-#   El valor 1.3 es una aproximación media para retrasos moderados (base scenario).
 REACTIONARY_COST_MULTIPLIER = 1.3
 
 # Umbral de delay "largo" que activa el multiplicador de coste no lineal.
-# Justificación: definición OTP estándar IATA/CODA — vuelos con delay < 15 min
-#   se contabilizan como "on-time".  La no-linealidad del coste a partir de
-#   este umbral está documentada en Cook & Tanner 2015 v4.1 (step cost functions).
 OTP_THRESHOLD_MIN = 15
 
+# Fuel consumption at gate (APU) per RECAT category in kg/min
+APU_FUEL_KG_PER_MIN = {
+    'A': 2.25,
+    'B': 1.83,
+    'C': 1.50,
+    'D': 1.16,
+    'E': 0.66,
+    'F': 0.25,
+}
+
+CO2_PER_KG_FUEL = 3.16
+
 
 # =============================================================================
-# UTILIDAD INTERNA: CO₂ por minuto de vuelo
+# UTILIDAD INTERNA: CO₂ por minuto de vuelo (Aire)
 # =============================================================================
 
-def _co2_per_min(distancia_km: float, asientos: int,
-                 duracion_min: float) -> float:
+def _co2_per_min(distancia_km: float, asientos: int, duracion_min: float) -> float:
     """
-    Calcula el CO₂ medio por minuto de vuelo usando compute_co2_total_kg.
-
-    FIX #1 — fuente única: tanto calcular_rf_emisiones (objetivo LP Task 2)
-    como calcular_kpis_ghp (métricas de CO₂) llaman a esta función, garantizando
-    que el valor optimizado y el reportado son coherentes.
-
-    FIX #1 — hipótesis holding: se usa la tasa crucero media como proxy de la
-    tasa de holding.  Esto sobreestima las emisiones reales del holding (menor
-    potencia), pero es conservador y mantiene la linealidad del modelo LP.
-
-    Args:
-        distancia_km:  Distancia planificada del vuelo (km).
-        asientos:      Número de asientos disponibles.
-        duracion_min:  Duración planificada del vuelo (min).
-
-    Returns:
-        CO₂ en kg por minuto de vuelo (≥ 0.01 como suelo mínimo).
+    Calcula el CO₂ medio por minuto de vuelo en el aire.
+    Maneja excepciones y previene divisiones por cero.
     """
     if distancia_km <= 0 or asientos <= 0 or duracion_min <= 0:
         return 0.01
 
-    # FIX #2 — validación upstream: compute_co2_total_kg llama a _validate_inputs
-    # que emite warnings para valores fuera de rango en lugar de fallar en silencio.
     try:
-        co2_total = compute_co2_total_kg(distancia_km, int(asientos), force=True)
+        co2_ask = compute_co2_ask(distancia_km, int(asientos), force=True)
+        co2_total = co2_ask * distancia_km * asientos / 1000.0
     except Exception:
         return 0.01
 
@@ -146,78 +89,34 @@ def _co2_per_min(distancia_km: float, asientos: int,
 # =============================================================================
 
 def calcular_rf_unitario(df_vuelos: pd.DataFrame) -> pd.Series:
-    """
-    Task 1 (validación): r_f = 1 para todos los vuelos.
-
-    Con esta configuración, el coste total = retraso total en minutos.
-    El GHP con r=1 debe dar el mismo coste total que el GDP (RBS),
-    ya que ambos minimizan el delay total con costes iguales.
-    Esto sirve para verificar que el solver LP está correctamente codificado.
-
-    Returns:
-        Series indexada por el índice del DataFrame, con r_f = 1.0.
-    """
+    """Task 1 (validación): r_f = 1 para todos los vuelos."""
     return pd.Series(1.0, index=df_vuelos.index)
 
 
 def calcular_rf_emisiones(df_vuelos: pd.DataFrame) -> pd.Series:
     """
     Task 2: r_f = CO₂ por minuto de retraso de cada vuelo (kg/min).
-
-    LÓGICA:
-        r_f = compute_co2_total_kg(distancia, asientos) / duracion_vuelo_min
-
-        Delay_CO2_{f,t} = r_f × (t - ETA(f))   [kg]
-
-        Con esto, el LP minimiza el CO₂ total del retraso, priorizando
-        vuelos con menor tasa de emisión por minuto (vuelos largos con
-        muchos asientos emiten menos por ASK que vuelos cortos).
-
-    FIX #1: usa _co2_per_min, la misma función que calcular_kpis_ghp,
-    garantizando coherencia entre objetivo LP y KPIs reportados.
-
-    Returns:
-        Series con r_f en kg CO₂/min para cada vuelo.
+    Diferencia APU (Candidatos en Tierra) vs Crucero (Exentos en el Aire).
     """
-    def _co2_per_min(fila):
-        distancia = fila.get('distancia_km', 0)
-        asientos  = fila.get('size_seats_avg', 180)
-        duracion  = fila.get('duracion_vuelo_min', 60)
+    def _apply_co2(fila):
+        # Si es candidato, asume emisiones de APU en tierra
+        if fila.get('flight_status') == FS_CANDIDATE:
+            recat_str = str(fila.get('recat', 'D')).upper()
+            fuel_min = APU_FUEL_KG_PER_MIN.get(recat_str, 1.16)
+            return fuel_min * CO2_PER_KG_FUEL
 
-        if distancia <= 0 or pd.isna(asientos) or pd.isna(distancia) or duracion <= 0:
-            return 0.1
+        # Si ya está volando, asume emisiones de aire
+        distancia = float(fila.get('distancia_km', 0) or 0)
+        asientos  = int(fila.get('size_seats_avg', 180) or 180)
+        duracion  = float(fila.get('duracion_vuelo_min', 60) or 60)
+        
+        return _co2_per_min(distancia_km=distancia, asientos=asientos, duracion_min=duracion)
 
-        co2_ask      = compute_co2_ask(float(distancia), int(asientos), force=True)
-        co2_total_kg = co2_ask * float(distancia) * int(asientos) / 1000
-        return max(co2_total_kg / float(duracion), 0.01)
-
-    return df_vuelos.apply(_co2_per_min, axis=1)
+    return df_vuelos.apply(_apply_co2, axis=1)
 
 
 def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
-    """
-    Task 3: r_f(t) — coeficiente de coste no lineal por vuelo (EUR/min).
-
-    El coeficiente r_f captura la no-linealidad del coste con el delay:
-    vuelos con más pasajeros de conexión y menos TAT disponible son
-    más costosos por minuto de retraso, especialmente en delays largos.
-
-    COMPONENTES DE r_f:
-    1. Coste base por minuto (COST_AIR_MIN o COST_GND_MIN)
-    2. Coste de pasajeros perdiendo conexión:
-         pax_connecting × COST_LOST_CONNECTION / ventana_conexion
-    3. Factor reactionary si el margen TAT < OTP_THRESHOLD_MIN
-
-    NOTA: En el LP usamos r_f como escalar (no función de t) porque
-    PuLP necesita coeficientes lineales. Para capturar la no-linealidad
-    usamos r_f evaluado en el punto de quiebre (OTP_THRESHOLD_MIN),
-    de modo que vuelos con más impacto post-umbral tienen mayor r_f.
-    Esto es consistente con la formulación c_{f,t} = r_f(t)·(t-ETA(f))
-    donde r_f(t) se aproxima por tramos (Ball, 2007).
-
-    Returns:
-        Series con r_f para cada vuelo (EUR/min de delay).
-    """
+    """Task 3: r_f(t) — coeficiente de coste no lineal por vuelo (EUR/min)."""
     rf = pd.Series(index=df_vuelos.index, dtype=float)
 
     for idx, fila in df_vuelos.iterrows():
@@ -256,24 +155,11 @@ def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
 
 
 # =============================================================================
-# PASO 2: CALCULAR TAT DISPONIBLE DESDE EL CSV (usando Registration Mark)
+# PASO 2: CALCULAR TAT DISPONIBLE DESDE EL CSV
 # =============================================================================
 
 def enriquecer_con_tat(df_vuelos: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcula el turn-around time disponible para cada vuelo usando el RM.
-
-    Para cada vuelo de llegada con un Registration Mark (RM), buscamos
-    si ese mismo avión tiene una salida posterior en el dataset.
-    Si la hay, el TAT disponible = ETD_salida - ETA_llegada.
-    Si no hay rotación conocida, asumimos TAT mínimo + 20 min.
-
-    Args:
-        df_vuelos: DataFrame con columnas RM, minutes_eta, minutes_etd, ADES.
-
-    Returns:
-        DataFrame con columna 'tat_disponible' añadida (minutos).
-    """
+    """Calcula el turn-around time disponible para cada vuelo usando el RM."""
     df = df_vuelos.copy()
     df['tat_disponible'] = np.nan
 
@@ -315,24 +201,7 @@ def resolver_ghp(
     max_air_delay: int = MAX_AIR_DELAY_MIN,
     verbose: bool = False,
 ) -> pd.DataFrame:
-    """
-    Resuelve el GHP como un problema de programación lineal entera binaria.
-
-    FORMULACIÓN (Ball, 2007):
-        Variables: x_{f,t} ∈ {0,1}
-        Objetivo:  min Σ_f Σ_t  c_{f,t} · x_{f,t}
-        donde      c_{f,t} = r_f · (t - ETA(f))  para t ≥ ETA(f)
-
-        Restricciones:
-          (1) Σ_f x_{f,t} ≤ 1           para todo t  (1 vuelo por slot)
-          (2) Σ_{t≥ETA(f)} x_{f,t} = 1  para todo f  (cada vuelo 1 slot)
-          (3) Los exentos tienen su slot fijado (no son variables del LP)
-          (4) Air delay de exentos ≤ max_air_delay
-
-    Returns:
-        DataFrame combinado con columnas assigned_slot, total_delay,
-        air_delay, ground_delay.
-    """
+    """Resuelve el GHP como un problema de programación lineal entera binaria."""
     slots = sorted(slots_disponibles)
 
     # -------------------------------------------------------------------------
@@ -455,14 +324,7 @@ def ejecutar_ghp_completo(
     params: dict,
     verbose: bool = True,
 ) -> dict:
-    """
-    Ejecuta los 3 escenarios GHP del WP3 y devuelve los resultados.
-
-    ESCENARIOS:
-        'task1_validation': r_f = 1 (validación — debe coincidir con GDP)
-        'task2_emissions':  minimizar CO₂ del retraso
-        'task3_cost':       minimizar coste real (pasajeros + reactionary)
-    """
+    """Ejecuta los 3 escenarios GHP del WP3 y devuelve los resultados."""
     df_enriched  = enriquecer_con_tat(df_vuelos_etiquetados)
     h_start      = params['H_START']
     df_en_ventana = df_enriched[df_enriched['minutes_eta'] >= h_start].copy()
@@ -508,21 +370,7 @@ def calcular_kpis_ghp(
     rf_series: pd.Series,
     nombre_escenario: str = 'GHP',
 ) -> dict:
-    """
-    Calcula los KPIs del WP3 para un escenario GHP.
-
-    FIX #3 — coherencia emisiones: el CO₂ del retraso se calcula con
-    _co2_per_min, la misma función que usa calcular_rf_emisiones al
-    construir el objetivo LP de Task 2.  Anteriormente se usaba la columna
-    'co2_kg_vuelo' del CSV, que podía diferir del modelo de emisiones.
-
-    KPIs calculados:
-        - Retraso total, medio, air/ground
-        - CO₂ del retraso (aire y tierra) — coherente con Task 2
-        - Coste del retraso (EUR) usando los r_f del escenario
-        - Nº vuelos retrasados, distribución por aerolínea
-        - Air delay check (vuelos con air delay > MAX_AIR_DELAY)
-    """
+    """Calcula los KPIs del WP3 para un escenario GHP (con APU en tierra)."""
     if df_ghp.empty:
         return {}
 
@@ -542,19 +390,23 @@ def calcular_kpis_ghp(
     max_air_obs    = df['air_delay'].max()
     infeasible_air = (df['air_delay'] > MAX_AIR_DELAY_MIN).sum()
 
-    # --- CO₂ del retraso — FIX #3 ---
-    # Se usa _co2_per_min (misma función que Task 2) en lugar de 'co2_kg_vuelo'.
-    def _co2_rate(row):
+    # --- CO₂ del retraso (Separando Aire y Tierra) ---
+    def _co2_rate_aire(row):
         return _co2_per_min(
-            distancia_km=row.get('distancia_km', 0),
+            distancia_km=float(row.get('distancia_km', 0) or 0),
             asientos=int(row.get('size_seats_avg', 180) or 180),
-            duracion_min=max(row.get('duracion_vuelo_min', 60), 1),
+            duracion_min=max(float(row.get('duracion_vuelo_min', 60) or 60), 1),
         )
 
-    co2_rate = df.apply(_co2_rate, axis=1)   # kg CO₂ / min de vuelo
+    def _get_apu_co2(recat):
+        recat_str = str(recat).upper() if pd.notna(recat) else 'D'
+        return APU_FUEL_KG_PER_MIN.get(recat_str, 1.16) * CO2_PER_KG_FUEL
 
-    co2_aire_delay   = (co2_rate * df['air_delay']).sum()
-    co2_tierra_delay = (co2_rate * df['ground_delay']).sum()
+    co2_rate_aire = df.apply(_co2_rate_aire, axis=1)
+    co2_rate_tierra = df.get('recat', pd.Series('D', index=df.index)).apply(_get_apu_co2)
+
+    co2_aire_delay   = (co2_rate_aire * df['air_delay']).sum()
+    co2_tierra_delay = (co2_rate_tierra * df['ground_delay']).sum()
     co2_total_delay  = co2_aire_delay + co2_tierra_delay
 
     # --- Coste del retraso usando r_f ---
@@ -651,6 +503,8 @@ if __name__ == '__main__':
         print(f"    Total delay:    {kpis['total_delay_min']:.1f} min")
         print(f"    Air delay:      {kpis['air_delay_min']:.1f} min")
         print(f"    Ground delay:   {kpis['ground_delay_min']:.1f} min")
-        print(f"    CO2 delay:      {kpis['co2_total_delay_kg']:.1f} kg")
+        print(f"    CO2 aire delay: {kpis['co2_aire_delay_kg']:.1f} kg")
+        print(f"    CO2 gnd delay:  {kpis['co2_tierra_delay_kg']:.1f} kg")
+        print(f"    CO2 total delay:{kpis['co2_total_delay_kg']:.1f} kg")
         print(f"    Coste delay:    {kpis['coste_delay_eur']:.0f} EUR")
         print(f"    Air infeasible: {kpis['infeasible_air']} vuelos")
