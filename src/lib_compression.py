@@ -1,7 +1,7 @@
-#aplicar el penalty a los vuelos que pasen de cierto valor de delay
-#hacer el algoritmo de compresion una vez que hayamos cancelado los vuelos
-#recordar que los slots siguen perteneciendo a las aerolineas
-#de momento seguiremos con la logica fifo
+# 1. Penalty: Only for flights past the delay cutoff.
+# 2. Compression: Needs to happen once we cleared out the cancelled flights.
+# 3. Slot ownership: Remember these are airline-owned, so they don't lose the reference.
+# 4. Sorting: Stay with FIFO for the time.
 import pandas as pd
 import numpy as np
 from config import FS_CANDIDATE
@@ -20,41 +20,41 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
     """
     df = df_vuelos_asignados.copy()
 
-    # Solo penalizamos vuelos que podemos regular (FS_CANDIDATE). 
-    # Los exentos no se tocan porque ya están en el aire
+    # Only penalize the flights we can regulate (FS_CANDIDATE). 
+    # EXEMPTS cannot be touched.
 
     candidatos = df[df['flight_status'] == FS_CANDIDATE]
     
     if candidatos.empty:
-        return df # No hay nada que comprimir
+        return df # Nothing to compress
         
     peores_vuelos = candidatos.nlargest(num_penalizados, 'total_delay')
-    #nlargest --> devuelve las n filas con valores mas grandes en la columna seleccionada 
+    #nlargest --> returns the n rows hith higher values in the selected column
 
-    #vamos a liberar los slots y guardar a que aerolineas pertenecen
+    #free the slots but save the airline-ownership
     slots_liberados = peores_vuelos[['assigned_slot', 'airline']].dropna()
     slots_abiertos = [ {'time': row['assigned_slot'], 'airline': row['airline']} for _, row in slots_liberados.iterrows()]
 
-    #vamos a borrar los atributos que no son la aerolinea de la fila que queremos dejar vacia
+    #erase all other atributes
     df.loc[peores_vuelos.index, 'assigned_slot'] = np.nan
     df.loc[peores_vuelos.index, 'total_delay'] = np.nan
     df.loc[peores_vuelos.index, 'air_delay'] = np.nan
     df.loc[peores_vuelos.index, 'ground_delay'] = np.nan
     
-    # Ordenamos la lista de huecos 
+    # sort the slot list 
     slots_abiertos = sorted(slots_abiertos, key=lambda x: x['time'])
 
-    # ALGORITMO DE COMPRESIÓN 
+    # COMPRESSION ALGORITHM
     while slots_abiertos:
-        # Cogemos el hueco más temprano que esté libre
+        # first free slot
         slot_actual = slots_abiertos.pop(0)
         t_slot = slot_actual['time']
         aerolinea_dueña = slot_actual['airline']
 
-        # Buscamos qué vuelos podrian ocupar este slot:
-        # - Tienen un slot asignado más tarde que este hueco (assigned_slot > t_slot)
-        # - Su hora prevista de llegada (ETA) les permite llegar a este hueco (ETA <= t_slot)
-        # - Son vuelos regulables (FS_CANDIDATE), no movemos exentos
+        # Finding flights that can jump into this slot:
+        # 1. Already have a later slot (assigned_slot > t_slot)
+        # 2. ETA allows them to make it on time (ETA <= t_slot)
+        # 3. Must be FS_CANDIDATE (don't touch exempt flights)
         elegibles = df[
             (df['assigned_slot'] > t_slot) & 
             (df['minutes_eta'] <= t_slot) & 
@@ -63,34 +63,33 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
         ]
 
         if elegibles.empty:
-            continue # Nadie puede aprovechar este hueco, se pierde.
+            continue # No one can take advantage of this slot, we lose it.
 
-        # COMPRESIÓN 1: Prioridad para la aerolínea dueña del slot
+        # COMPRESSION 1: Priority for the airline that owns the slot
         elegibles_dueña = elegibles[elegibles['airline'] == aerolinea_dueña]
         
         vuelo_seleccionado_idx = None
         
         if not elegibles_dueña.empty:
-            # La aerolínea dueña adelanta al vuelo que tenga el slot original más temprano
+            #the owner airline moves the flight to an early slot
             vuelo_seleccionado_idx = elegibles_dueña.sort_values('assigned_slot').index[0]
         else:
-            # COMPRESIÓN 2:Si la dueña no puede, pasa a la bolsa común
-            # Se lo damos al vuelo elegible que llevaba más tiempo esperando (menor ETA)
+            # COMPRESSION 2: if the owner can't fill the slot, it frees the ownership
+            # we give the slot to the next flight with the earliest ETA
             vuelo_seleccionado_idx = elegibles.sort_values('minutes_eta').index[0]
 
-        # 4. EJECUTAR EL CAMBIO 
+        # EXECUTE CHANGES 
 
         slot_dejado_libre = df.at[vuelo_seleccionado_idx, 'assigned_slot']
         aerolinea_que_deja_slot = df.at[vuelo_seleccionado_idx, 'airline']
 
-        # Movemos el vuelo que toca al nuevo hueco
+        #move the flight to the new slot
         df.at[vuelo_seleccionado_idx, 'assigned_slot'] = t_slot
 
-        # El hueco que este vuelo acaba de dejar atrás entra en la bolsa de slots
-        # abiertos y pertenece a la aerolínea que lo acaba de dejar.
+        # the slot that this moved flight has left free goes to the common bag of open slots but mantains the airline-ownership
         slots_abiertos.append({'time': slot_dejado_libre, 'airline': aerolinea_que_deja_slot})
         
-        # Reordenamos la lista de huecos para asegurar que siempre atacamos el más temprano
+        # Resort the list to ensure we always give priority to the earliest
         slots_abiertos = sorted(slots_abiertos, key=lambda x: x['time'])
 
     return df
