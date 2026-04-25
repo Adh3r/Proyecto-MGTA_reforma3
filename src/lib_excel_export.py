@@ -137,7 +137,7 @@ def _sheet_parametros(wb, params, h_noreg, r_min_newell: float):
         min_a_hhmm(h_noreg),
         f"{int(round(r_min_newell))} min",
         f"{dur_total} min desde inicio ({dur_total//60}h {dur_total%60}min)",
-        f"{params.get('H_FREEZE_OFFSET', 150)} min antes de H_START",
+        f"{params.get('H_File', 150)} min antes de H_START",
         '', '3.000 km desde LEBL', 'ECAC (European Civil Aviation Conference)',
         '',
         f"EUR {COST_AIR_MIN} / minuto", f"EUR {COST_GND_MIN} / minuto",
