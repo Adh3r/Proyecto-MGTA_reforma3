@@ -69,7 +69,7 @@ APU_FUEL_KG_PER_MIN = {
 }
 
 # Minutos reglamentarios de uso de APU antes del pushback
-APU_MANDATORY_MINUTES = 10.0
+APU_MANDATORY_MINUTES = 0
 
 # Factor de emisión de la red eléctrica en España (kg CO2 / kWh) 
 # Fuente: Red Eléctrica de España (REE) / MITERD 2023
@@ -348,154 +348,127 @@ def _construir_resultado(
 # PASO 4: ORQUESTADOR WP3
 # =============================================================================
 
+# Modifica estas funciones en tu archivo lib_ghp_solver.py
+
 def ejecutar_ghp_completo(
-    df_vuelos_etiquetados: pd.DataFrame,
-    slots_disponibles: list,
-    params: dict,
-    verbose: bool = True,
+    df_vuelos_etiquetados: pd.DataFrame, 
+    slots_disponibles: list, 
+    params: dict, 
+    verbose: bool = True
 ) -> dict:
-    """Ejecuta los 3 escenarios GHP del WP3 y devuelve los resultados."""
-    df_enriched  = enriquecer_con_tat(df_vuelos_etiquetados)
-    h_start      = params['H_START']
+    """Ejecuta los 3 escenarios GHP y asegura que los KPIs sean comparables."""
+    df_enriched = enriquecer_con_tat(df_vuelos_etiquetados)
+    h_start = params['H_START']
     df_en_ventana = df_enriched[df_enriched['minutes_eta'] >= h_start].copy()
 
     df_candidatos = df_en_ventana[df_en_ventana['flight_status'] == FS_CANDIDATE].copy()
-    df_exentos    = df_en_ventana[df_en_ventana['flight_status'] != FS_CANDIDATE].copy()
+    df_exentos = df_en_ventana[df_en_ventana['flight_status'] != FS_CANDIDATE].copy()
 
-    if verbose:
-        print(f"   GHP: {len(df_candidatos)} candidatos, {len(df_exentos)} exentos")
-        print(f"        {len(slots_disponibles)} slots disponibles")
+    # --- CALCULAMOS LOS COEFICIENTES MAESTROS ---
+    # Calculamos el coste económico real (EUR/min) para TODOS los escenarios
+    rf_coste_maestro = calcular_rf_coste(df_en_ventana)
+    
+    # Calculamos las emisiones (kg/min) para la optimización de la Task 2
+    rf_emisiones = calcular_rf_emisiones(df_en_ventana)
+    
+    # Coeficientes unitarios para Task 1
+    rf_unitario = calcular_rf_unitario(df_en_ventana)
 
     resultados = {}
 
-    for tarea, rf_fn, nombre in [
-        ('task1_validation', calcular_rf_unitario,  'GHP_Task1_Validation'),
-        ('task2_emissions',  calcular_rf_emisiones, 'GHP_Task2_Emissions'),
-        ('task3_cost',       calcular_rf_coste,     'GHP_Task3_Cost'),
-    ]:
-        if verbose:
-            print(f"\n   [{nombre}] Calculando r_f...")
-        rf = rf_fn(df_en_ventana)
-        resultados[tarea] = resolver_ghp(
-            df_candidatos.copy(), df_exentos.copy(),
-            slots_disponibles, rf,
-            nombre_problema=nombre, verbose=verbose,
-        )
-        resultados[f'rf_{tarea.split("_")[1]}'] = rf
+    # Definición de tareas: (ID, Coeficiente para el SOLVER, Nombre)
+    tareas = [
+        ('task1_validation', rf_unitario,   'GHP_Task1_Min_Delay'),
+        ('task2_emissions',  rf_emisiones,  'GHP_Task2_Min_Emissions'),
+        ('task3_cost',       rf_coste_maestro, 'GHP_Task3_Min_Cost'),
+    ]
 
-    # Alias para compatibilidad con código existente
-    resultados['rf_unitario']  = resultados.pop('rf_task1', resultados.get('rf_validation'))
-    resultados['rf_emisiones'] = resultados.pop('rf_task2', resultados.get('rf_emissions'))
-    resultados['rf_coste']     = resultados.pop('rf_task3', resultados.get('rf_cost'))
+    for tarea_id, rf_solver, nombre in tareas:
+        if verbose: print(f"\n   [{nombre}] Resolviendo optimización...")
+        
+        # El solver usa 'rf_solver' para decidir la asignación
+        df_res = resolver_ghp(
+            df_candidatos.copy(), df_exentos.copy(), 
+            slots_disponibles, rf_solver, 
+            nombre_problema=nombre, verbose=verbose
+        )
+        
+        # Los KPIs SIEMPRE se calculan usando el 'rf_coste_maestro' para los euros
+        resultados[tarea_id] = df_res
+        resultados[f'kpis_{tarea_id}'] = calcular_kpis_ghp(df_res, rf_coste_maestro, nombre)
+
+    # Guardamos los coeficientes para auditoría
+    resultados['rf_unitario']  = rf_unitario
+    resultados['rf_emisiones'] = rf_emisiones
+    resultados['rf_coste']     = rf_coste_maestro
 
     return resultados
 
-
-# =============================================================================
-# PASO 5: KPIs WP3
-# =============================================================================
-
 def calcular_kpis_ghp(
-    df_ghp: pd.DataFrame,
-    rf_series: pd.Series,
-    nombre_escenario: str = 'GHP',
+    df_ghp: pd.DataFrame, 
+    rf_coste_serie: pd.Series, 
+    nombre_escenario: str = 'GHP'
 ) -> dict:
-    """Calcula los KPIs del WP3 para un escenario GHP (con APU en tierra)."""
-    if df_ghp.empty:
-        return {}
+    """Calcula KPIs económicos (EUR) y ambientales (kg CO2) detallados."""
+    if df_ghp.empty: return {}
 
     df = df_ghp.copy()
-    for col in ('total_delay', 'air_delay', 'ground_delay'):
-        if col not in df.columns:
-            df[col] = 0.0
-
-    # --- Retrasos ---
-    total_delay  = df['total_delay'].sum()
-    mean_delay   = df['total_delay'].mean()
-    air_delay    = df['air_delay'].sum()
+    
+    # --- 1. RETRASOS Y FACTIBILIDAD ---
+    total_delay = df['total_delay'].sum()
+    air_delay   = df['air_delay'].sum()
     ground_delay = df['ground_delay'].sum()
-    n_delayed    = (df['total_delay'] > 0).sum()
-    n_flights    = len(df)
+    # Vuelos que superan el margen de seguridad en aire (90 min)
+    infeasible_air = len(df[df['air_delay'] > MAX_AIR_DELAY_MIN])
 
-    max_air_obs    = df['air_delay'].max()
-    infeasible_air = (df['air_delay'] > MAX_AIR_DELAY_MIN).sum()
+    # --- 2. DESGLOSE DE CO2 ---
+    def _calcular_desglose_co2(row):
+        # Aire (Scope 1)
+        co2_aire = 0.0
+        if row['air_delay'] > 0:
+            rate = _co2_per_min(row.get('distancia_km', 0), 
+                                int(row.get('size_seats_avg', 180)), 
+                                max(row.get('duracion_vuelo_min', 60), 1))
+            co2_aire = rate * row['air_delay']
+        
+        # Tierra (Scope 2 - FEGP)
+        recat = str(row.get('recat', 'D')).upper()
+        rate_fegp = FEGP_KW_PER_RECAT.get(recat, 50.0) * (1/60.0) * GRID_EMISSION_FACTOR_KG_KWH
+        co2_fegp = rate_fegp * row['ground_delay']
+        
+        # APU (Scope 1 - Fijo si es candidato)
+        co2_apu = 0.0
+        if row.get('flight_status') == FS_CANDIDATE:
+            co2_apu = APU_MANDATORY_MINUTES * APU_FUEL_KG_PER_MIN.get(recat, 1.16) * CO2_PER_KG_FUEL
+            
+        return pd.Series([co2_aire, co2_fegp, co2_apu])
 
-    # --- CO₂ del retraso (Separando Aire, FEGP y APU fijo) ---
-    def _co2_rate_aire(row):
-        return _co2_per_min(
-            distancia_km=float(row.get('distancia_km', 0) or 0),
-            asientos=int(row.get('size_seats_avg', 180) or 180),
-            duracion_min=max(float(row.get('duracion_vuelo_min', 60) or 60), 1),
-        )
+    df[['c_aire', 'c_fegp', 'c_apu']] = df.apply(_calcular_desglose_co2, axis=1)
+    
+    co2_aire_total = df['c_aire'].sum()
+    co2_fegp_total = df['c_fegp'].sum()
+    co2_apu_total  = df['c_apu'].sum()
 
-    def _get_fegp_co2_min(recat):
-        recat_str = str(recat).upper() if pd.notna(recat) else 'D'
-        potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 50.0)
-        return potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
-
-    def _get_apu_co2_fijo(recat):
-        recat_str = str(recat).upper() if pd.notna(recat) else 'D'
-        fuel_apu_min = APU_FUEL_KG_PER_MIN.get(recat_str, 1.16)
-        return APU_MANDATORY_MINUTES * fuel_apu_min * CO2_PER_KG_FUEL
-
-    # Scope 1 Aire
-    co2_rate_aire = df.apply(_co2_rate_aire, axis=1)
-    co2_aire_delay = (co2_rate_aire * df['air_delay']).sum()
-
-    # Scope 2 FEGP Tierra
-    col_recat = df.get('recat', pd.Series('D', index=df.index))
-    co2_rate_fegp = col_recat.apply(_get_fegp_co2_min)
-    co2_tierra_fegp_delay = (co2_rate_fegp * df['ground_delay']).sum()
-
-    # Scope 1 APU Fijo (Solo aplicable a candidatos gestionados en tierra)
-    mask_candidato = (df.get('flight_status', '') == FS_CANDIDATE)
-    co2_apu_fijo = col_recat.apply(_get_apu_co2_fijo) * mask_candidato
-    co2_tierra_apu_fijo = co2_apu_fijo.sum()
-
-    co2_tierra_total = co2_tierra_fegp_delay + co2_tierra_apu_fijo
-    co2_total_emisiones = co2_aire_delay + co2_tierra_total
-
-    # --- Coste del retraso usando r_f ---
-    coste_total = 0.0
+    # --- 3. COSTE ECONÓMICO (EUR) ---
+    # Usamos siempre rf_coste_serie para que la comparación sea en EUROS
+    coste_total_eur = 0.0
     for i, row in df.iterrows():
         orig_idx = row.get('index', i)
-        rf = rf_series.get(orig_idx, 1.0)
-        coste_total += rf * row['total_delay']
-
-    # --- KPIs por aerolínea (top 4) ---
-    kpis_aerolinea = {}
-    if 'airline' in df.columns:
-        top_aerolineas = (
-            df[df['total_delay'] > 0]
-            .groupby('airline').size()
-            .nlargest(4).index.tolist()
-        )
-        for al in top_aerolineas:
-            sub = df[df['airline'] == al]
-            kpis_aerolinea[al] = {
-                'n_vuelos':    len(sub),
-                'delay_medio': round(sub['total_delay'].mean(), 2),
-                'delay_total': round(sub['total_delay'].sum(), 2),
-                'delay_std':   round(sub['total_delay'].std(), 2),
-            }
+        rf_eur_min = rf_coste_serie.get(orig_idx, 0.0)
+        coste_total_eur += rf_eur_min * row['total_delay']
 
     return {
-        'escenario':              nombre_escenario,
-        'n_flights':              n_flights,
-        'n_delayed':              int(n_delayed),
-        'total_delay_min':        round(total_delay, 2),
-        'mean_delay_min':         round(mean_delay, 2),
-        'air_delay_min':          round(air_delay, 2),
-        'ground_delay_min':       round(ground_delay, 2),
-        'max_air_delay_obs':      round(max_air_obs, 2),
-        'infeasible_air':         int(infeasible_air),
-        'co2_aire_delay_kg':      round(co2_aire_delay, 2),
-        'co2_tierra_fegp_delay_kg': round(co2_tierra_fegp_delay, 2),
-        'co2_tierra_apu_fijo_kg': round(co2_tierra_apu_fijo, 2),
-        'co2_tierra_total_kg':    round(co2_tierra_total, 2),
-        'co2_total_kg':           round(co2_total_emisiones, 2),
-        'coste_delay_eur':        round(coste_total, 2),
-        'kpis_aerolinea':         kpis_aerolinea,
+        'escenario': nombre_escenario,
+        'total_delay_min': round(total_delay, 2),
+        'air_delay_min': round(air_delay, 2),
+        'ground_delay_min': round(ground_delay, 2),
+        'co2_aire_delay_kg': round(co2_aire_total, 2),
+        'co2_tierra_fegp_delay_kg': round(co2_fegp_total, 2),
+        'co2_tierra_apu_fijo_kg': round(co2_apu_total, 2),
+        'co2_tierra_total_kg': round(co2_fegp_total + co2_apu_total, 2),
+        'co2_total_kg': round(co2_aire_total + co2_fegp_total + co2_apu_total, 2),
+        'coste_delay_eur': round(coste_total_eur, 2),
+        'infeasible_air': infeasible_air
     }
 
 
@@ -540,13 +513,14 @@ if __name__ == '__main__':
     print(f"  Diferencia: {diff_pct:.1f}%  {'✅ OK' if diff_pct < 5 else '⚠️ Revisar'}")
     print(f"{'='*50}")
 
-    for escenario, rf_key in [
-        ('task2_emissions', 'rf_emisiones'),
-        ('task3_cost',      'rf_coste'),
-    ]:
+    rf_dinero = resultados_ghp['rf_coste']
+
+    for escenario in ['task2_emissions', 'task3_cost']:
         df_esc = resultados_ghp[escenario]
-        rf_esc = resultados_ghp[rf_key]
-        kpis   = calcular_kpis_ghp(df_esc, rf_esc, escenario)
+        
+        # AQUÍ ESTÁ EL CAMBIO: Usamos 'rf_dinero' para ambos escenarios
+        kpis = calcular_kpis_ghp(df_esc, rf_dinero, escenario)
+        
         print(f"\n  {escenario.upper()}:")
         print(f"    Total delay:        {kpis['total_delay_min']:.1f} min")
         print(f"    Air delay:          {kpis['air_delay_min']:.1f} min")
@@ -555,11 +529,9 @@ if __name__ == '__main__':
         print(f"    CO2 tierra (FEGP):  {kpis['co2_tierra_fegp_delay_kg']:.1f} kg")
         print(f"    CO2 tierra (APU):   {kpis['co2_tierra_apu_fijo_kg']:.1f} kg")
         print(f"    CO2 tierra total:   {kpis['co2_tierra_total_kg']:.1f} kg")
-        print(f"    CO2 total generad:  {kpis['co2_total_kg']:.1f} kg")
-        print(f"    Coste delay:        {kpis['coste_delay_eur']:.0f} EUR")
+        print(f"    CO2 total generado: {kpis['co2_total_kg']:.1f} kg")
+        print(f"    Coste delay:        {kpis['coste_delay_eur']:.0f} EUR") # <--- Ahora será comparable
         print(f"    Air infeasible:     {kpis['infeasible_air']} vuelos")
-
-        # Añade esto en la zona de DEBUG de lib_ghp_solver.py
     
     # Extraemos el DataFrame de resultados que equivale a la hoja 2_Regulacion_GDP
     df_resultado = resultados_ghp['task1_validation']

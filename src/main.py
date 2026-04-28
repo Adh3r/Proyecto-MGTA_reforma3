@@ -129,17 +129,38 @@ def ejecutar_proyecto_completo() -> None:
     print("\n   📊 RESUMEN EJECUTIVO WP3:")
     print(f"      • Retraso Base (RBS):    {df_final['total_delay'].sum():.1f} min")
     print(f"      • Retraso Óptimo (Task1):{kpis_ghp['task1_validation']['total_delay_min']:.1f} min")
-    print(f"      • Emisiones Ópt. (Task2):{kpis_ghp['task2_emissions']['co2_total_delay_kg']:,.1f} kg CO2")
+    print(f"      • Emisiones Ópt. (Task2):{kpis_ghp['task2_emissions']['co2_total_kg']:,.1f} kg CO2")
     print(f"      • Coste Ópt. (Task3):    {kpis_ghp['task3_cost']['coste_delay_eur']:,.0f} EUR")
     print(f"      • Equidad (RSD GDP):     {rsd_gdp:.1f}%")
     print(f"      • Equidad (RSD GHP T3):  {rsd_ghp:.1f}%")
 
     comparativa_wp3 = pd.DataFrame({
-        'Métrica': ['Retraso Total (min)', 'Retraso Aire (min)', 'Retraso Tierra (min)', 'CO₂ Retraso (kg)', 'Coste Retraso (EUR)', 'RSD Equidad (%)'],
-        'GDP (RBS)': [df_final['total_delay'].sum(), df_final['air_delay'].sum(), df_final['ground_delay'].sum(), kpis_gdp['co2_aire_delay'] + kpis_gdp['co2_tierra_delay'], kpis_gdp['cost_gdp'], rsd_gdp],
-        'GHP Task 1': [kpis_ghp['task1_validation']['total_delay_min'], kpis_ghp['task1_validation']['air_delay_min'], kpis_ghp['task1_validation']['ground_delay_min'], kpis_ghp['task1_validation']['co2_total_delay_kg'], None, None],
-        'GHP Task 3': [kpis_ghp['task3_cost']['total_delay_min'], kpis_ghp['task3_cost']['air_delay_min'], kpis_ghp['task3_cost']['ground_delay_min'], kpis_ghp['task3_cost']['co2_total_delay_kg'], kpis_ghp['task3_cost']['coste_delay_eur'], rsd_ghp]
-    })
+    'Métrica': ['Retraso Total (min)', 'Retraso Aire (min)', 'Retraso Tierra (min)', 'CO₂ Retraso (kg)', 'Coste Retraso (EUR)', 'RSD Equidad (%)'],
+    'GDP (RBS)': [
+        df_final['total_delay'].sum(), 
+        df_final['air_delay'].sum(), 
+        df_final['ground_delay'].sum(), 
+        kpis_gdp['co2_aire_delay'] + kpis_gdp['co2_tierra_delay'], 
+        kpis_gdp['cost_gdp'], 
+        rsd_gdp
+    ],
+    'GHP Task 1': [
+        kpis_ghp['task1_validation']['total_delay_min'], 
+        kpis_ghp['task1_validation']['air_delay_min'], 
+        kpis_ghp['task1_validation']['ground_delay_min'], 
+        kpis_ghp['task1_validation']['co2_total_kg'],
+        None, 
+        None
+    ],
+    'GHP Task 3': [
+        kpis_ghp['task3_cost']['total_delay_min'], 
+        kpis_ghp['task3_cost']['air_delay_min'], 
+        kpis_ghp['task3_cost']['ground_delay_min'], 
+        kpis_ghp['task3_cost']['co2_total_kg'],
+        kpis_ghp['task3_cost']['coste_delay_eur'], 
+        rsd_ghp
+    ]
+})
     
     path_wp3 = os.path.join(BASE_DIR, 'data/processed/wp3_comparativa_final.csv')
     comparativa_wp3.to_csv(path_wp3, index=False)
