@@ -335,23 +335,23 @@ def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
     METODOLOGÍA (Cook & Tanner 2015, University of Westminster):
 
     1. MAPEO DE AERONAVE:
-       Tipo ICAO ('ATYP' del CSV o 'f' del fleet CSV) → tipo Cook & Tanner
-       via _FLEET_TO_COOK. Fallback por RECAT.
+       Tipo ICAO → tipo Cook via _mapear_tipo_cook(). Fallback por RECAT + seats.
 
     2. SELECCIÓN DE TABLA:
-       - Sin reactionary (margen_tat >= OTP_THRESHOLD_MIN) → Tabla 12 (hard+soft)
-       - Con reactionary (margen_tat < OTP_THRESHOLD_MIN)  → Tabla 11 (solo hard)
-       margen_tat = tat_disponible - tat_min_avion
+       El r_f se evalúa en OTP_THRESHOLD_MIN = 15 min. En ese punto el delay
+       ya supera el umbral OTP, por lo que Cook aplica costes FULL (con
+       reactionary) → _COST_HARD_TABLE (Tables 26-29, base scenario).
+       Fuente: Cook & Tanner (2015) §3.7, Table 19 — reactionary multipliers
+       son positivos para delay >= 15 min.
 
-    3. AJUSTE POR PASAJEROS REALES:
+    3. AJUSTE POR PASAJEROS REALES (Annex B2):
        pax_reales = size_seats_avg × LOAD_FACTOR_EU
-       factor_pax = pax_reales / pax_base_cook  (Annex 3)
+       factor_pax = pax_reales / pax_base_cook
        coste_ajustado = coste_tabla × factor_pax
 
-    4. r_f = coste_ajustado(delay=15 min) / 15
-       Evaluado en el punto OTP (15 min) como coste marginal EUR/min.
+    4. r_f = coste_ajustado(delay=15 min) / 15  [EUR/min]
 
-    Fuentes: Cook & Tanner (2015) Tables 11, 12, Annex 3. Ball (2007).
+    Fuentes: Cook & Tanner (2015) Tables 26-29, Annex B2.
     """
     rf = pd.Series(index=df_vuelos.index, dtype=float)
 
@@ -367,14 +367,9 @@ def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
 
         tipo_cook = _mapear_tipo_cook(tipo_icao, recat, asientos)
 
-        tat_min_avion  = TAT_MIN['wide'] if es_wide else TAT_MIN['narrow']
-        tat_disponible = fila.get('tat_disponible', tat_min_avion + 20)
-        if pd.isna(tat_disponible):
-            tat_disponible = tat_min_avion + 20
-        margen_tat      = max(float(tat_disponible) - tat_min_avion, 0)
-        hay_reactionary = margen_tat < OTP_THRESHOLD_MIN
-
-        coste_tabla = _interpolar_coste(tipo_cook, OTP_THRESHOLD_MIN, hay_reactionary)
+        # r_f evaluado en OTP_THRESHOLD_MIN (15 min): delay >= 15 min activa
+        # costes reactionary segun Cook §3.7 → tabla FULL (_COST_HARD_TABLE).
+        coste_tabla = _interpolar_coste(tipo_cook, OTP_THRESHOLD_MIN, usar_hard=True)
 
         pax_base   = _PAX_BASE_TABLE.get(tipo_cook, 130)
         pax_reales = max(int(asientos * LOAD_FACTOR_EU), 1)
@@ -599,13 +594,19 @@ def calcular_kpis_ghp(
 
     COSTE DE RETRASO — Cook & Tanner (2015), University of Westminster:
       - Por cada vuelo con delay real > 0, se interpola el coste NO LINEAL
-        directamente de las tablas Cook (Tables 22-29, base scenario, EUR 2014).
-      - Se selecciona tabla PRIMARY (sin reactionary) o FULL (con reactionary)
-        segun el margen TAT disponible vs. TAT minimo de la categoria.
-      - El coste se escala: factor_pax = pax_reales / pax_base_cook (Annex B2),
-        donde pax_reales = size_seats_avg x LOAD_FACTOR_EU.
-      - rf_series se mantiene en la firma por compatibilidad con llamadas externas
-        pero ya no interviene en el calculo de coste_delay_eur.
+        directamente de las tablas Cook (base scenario, EUR 2014).
+      - Criterio PRIMARY vs FULL por duracion del delay (Cook §3.7, Table 19):
+          · delay <  OTP_THRESHOLD_MIN (15 min) → PRIMARY sin reactionary
+            → _COST_TOTAL_TABLE (hard + soft, Tables 22-25)
+          · delay >= OTP_THRESHOLD_MIN (15 min) → FULL con reactionary
+            → _COST_HARD_TABLE (Tables 26-29)
+        Razon: el CSV solo contiene llegadas a LEBL; no hay datos de salidas
+        para calcular TAT real. Cook establece que el multiplicador reactionary
+        se activa sistematicamente para delays >= 15 min (§3.7.1, Table 19).
+      - El coste se escala: factor_pax = (size_seats_avg x LF) / pax_base_cook
+        (Annex B2), donde LF = LOAD_FACTOR_EU.
+      - rf_series se mantiene en la firma por compatibilidad externa pero ya
+        no interviene en el calculo de coste_delay_eur.
 
     Fuente: Cook, A., Tanner, G. (2015). European airline delay cost reference
             values. Version 4.1. University of Westminster / EUROCONTROL PRU.
@@ -647,24 +648,22 @@ def calcular_kpis_ghp(
     co2_tierra_delay = (co2_rate_tierra * df['ground_delay']).sum()
     co2_total_delay  = co2_aire_delay + co2_tierra_delay
 
-    # --- Coste del retraso — Cook & Tanner (2015), Tables 22-25 / 26-29 ---
+    # --- Coste del retraso — Cook & Tanner (2015), Tables 22-29 ---
     #
-    # Metodología:
-    #   1. Mapear ATYP → tipo Cook via _mapear_tipo_cook().
-    #   2. Seleccionar tabla:
-    #      · PRIMARY  (sin reactionary): margen_tat >= OTP_THRESHOLD_MIN → _COST_TOTAL_TABLE
-    #      · FULL     (con reactionary): margen_tat <  OTP_THRESHOLD_MIN → _COST_HARD_TABLE
-    #   3. Interpolar el coste TOTAL para el delay real de cada vuelo (no lineal).
-    #   4. Ajustar por pasajeros reales vs. pax base Cook (Annex B2):
-    #        factor_pax = (size_seats_avg × LOAD_FACTOR_EU) / pax_base_cook
-    #   5. coste_vuelo = coste_tabla × factor_pax
+    # PRIMARY (sin reactionary, Tables 22-25, hard+soft) → delay <  15 min
+    # FULL    (con reactionary, Tables 26-29, hard only) → delay >= 15 min
     #
-    # Fuente: Cook & Tanner (2015), University of Westminster para EUROCONTROL.
-    #         Tables 22-29, Annex B2. Versión 4.1 (referencia año 2014).
+    # Razon del criterio por delay y no por TAT:
+    #   El CSV vuelos_finales_gdp.csv solo contiene llegadas a LEBL; no existen
+    #   registros de salidas desde LEBL para el mismo RM, por lo que el TAT
+    #   disponible nunca puede calcularse y todos los vuelos caerian al fallback
+    #   (tat_min+20 → margen 20 >= 15 → siempre PRIMARY → reactionary=0).
+    #   Cook §3.7.1 y Table 19 establecen que el multiplicador reactionary
+    #   se activa para delays >= 15 min de forma sistematica en la red europea.
     # -------------------------------------------------------------------------
     coste_total         = 0.0
-    coste_primary_total = 0.0   # vuelos sin riesgo reactionary (margen_tat >= 15 min)
-    coste_react_total   = 0.0   # vuelos con riesgo reactionary (margen_tat <  15 min)
+    coste_primary_total = 0.0   # vuelos con delay <  15 min (PRIMARY, sin reactionary)
+    coste_react_total   = 0.0   # vuelos con delay >= 15 min (FULL, con reactionary)
 
     for i, row in df.iterrows():
         delay_real = float(row.get('total_delay', 0) or 0)
@@ -679,14 +678,9 @@ def calcular_kpis_ghp(
 
         tipo_cook = _mapear_tipo_cook(tipo_icao, recat, asientos)
 
-        # Primary (Tables 22-25) vs Full/reactionary (Tables 26-29) segun margen TAT
-        es_wide        = recat in ('A', 'B', 'C')
-        tat_min_avion  = TAT_MIN['wide'] if es_wide else TAT_MIN['narrow']
-        tat_disponible = float(row.get('tat_disponible', tat_min_avion + 20) or tat_min_avion + 20)
-        margen_tat     = max(tat_disponible - tat_min_avion, 0)
-        # usar_hard=True  -> tabla FULL con costes reactionary (Tables 26-29, hard only)
-        # usar_hard=False -> tabla PRIMARY sin reactionary (Tables 22-25, hard+soft)
-        usar_hard = margen_tat < OTP_THRESHOLD_MIN
+        # PRIMARY (Tables 22-25, hard+soft) si delay <  15 min
+        # FULL    (Tables 26-29, hard only) si delay >= 15 min  [Cook §3.7.1, Table 19]
+        usar_hard = delay_real >= OTP_THRESHOLD_MIN
 
         # Coste Cook interpolado para el delay REAL del vuelo (no lineal por franja)
         coste_tabla = _interpolar_coste(tipo_cook, delay_real, usar_hard)
