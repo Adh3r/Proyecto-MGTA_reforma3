@@ -386,34 +386,17 @@ def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
 # =============================================================================
 
 def enriquecer_con_tat(df_vuelos: pd.DataFrame) -> pd.DataFrame:
-    """Calcula el turn-around time disponible para cada vuelo usando el RM."""
+    """Asigna el TAT asumiendo el fallback (CSV solo contiene llegadas)."""
     df = df_vuelos.copy()
-    df['tat_disponible'] = np.nan
-
-    if 'RM' in df.columns:
-        for rm, grupo in df.groupby('RM'):
-            if pd.isna(rm) or rm == '':
-                continue
-
-            vuelos_rm   = grupo.sort_values('minutes_eta')
-            llegadas_rm = vuelos_rm[vuelos_rm['ADES'] == 'LEBL']
-            salidas_rm  = vuelos_rm[vuelos_rm['ADEP'] == 'LEBL']
-
-            for idx_ll, vuelo_llegada in llegadas_rm.iterrows():
-                eta = vuelo_llegada['minutes_eta']
-                salidas_post = salidas_rm[salidas_rm['minutes_etd'] > eta]
-                if not salidas_post.empty:
-                    etd_siguiente = salidas_post['minutes_etd'].min()
-                    df.at[idx_ll, 'tat_disponible'] = max(etd_siguiente - eta, 0)
-
+    
     recat_col   = df['recat'].fillna('D')
+    # TAT mínimo + 20 min de margen, según comentarios.
     tat_default = recat_col.apply(
         lambda r: TAT_MIN['wide'] + 20 if r in ('A', 'B', 'C')
                   else TAT_MIN['narrow'] + 20
     )
-    df['tat_disponible'] = df['tat_disponible'].fillna(tat_default)
+    df['tat_disponible'] = tat_default
     return df
-
 
 # =============================================================================
 # PASO 3: SOLVER GHP — PROGRAMACIÓN LINEAL ENTERA BINARIA
@@ -776,10 +759,13 @@ if __name__ == '__main__':
     print(f"  Diferencia: {diff_pct:.1f}%  {'✅ OK' if diff_pct < 5 else '⚠️ Revisar'}")
     print(f"{'='*50}")
 
+    # AQUÍ ESTÁ LA MAGIA: Añadida la task1_validation al bucle
     for escenario, rf_key in [
-        ('task2_emissions', 'rf_emisiones'),
-        ('task3_cost',      'rf_coste'),
+        ('task1_validation', 'rf_unitario'),
+        ('task2_emissions',  'rf_emisiones'),
+        ('task3_cost',       'rf_coste'),
     ]:
+        
         df_esc = resultados_ghp[escenario]
         rf_esc = resultados_ghp[rf_key]
         kpis   = calcular_kpis_ghp(df_esc, rf_esc, escenario)
