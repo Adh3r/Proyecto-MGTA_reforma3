@@ -178,16 +178,17 @@ def _sheet_datos_crudos(wb, df_vuelos_crudo):
     ws.sheet_view.showGridLines = False
 
 
-def _sheet_regulacion_gdp(wb, df_res):
+def _sheet_regulacion_escenario(wb, df_res, nombre_hoja: str):
     cols = ['ARCID','airline','ADEP','ATYP','recat','is_ecac',
             'distancia_km','minutes_eta','assigned_slot',
             'total_delay','air_delay','ground_delay','flight_status']
     df_export = (df_res[cols].copy().sort_values('minutes_eta')
                  .rename(columns={'minutes_eta':'ETA_Prog','assigned_slot':'CTA'})
                  .reset_index(drop=True))
-    ws = wb.create_sheet('2_Regulacion_GDP')
+    ws = wb.create_sheet(title=nombre_hoja)
     _escribir_dataframe_con_formato(ws, df_export)
-    _autoajustar_columnas(ws); _congelar_primera_fila(ws)
+    _autoajustar_columnas(ws)
+    _congelar_primera_fila(ws)
     ws.sheet_view.showGridLines = False
 
 
@@ -412,56 +413,81 @@ def _sheet_equidad_rbs(wb, df_res):
 # ORQUESTADOR PUBLICO
 # =============================================================================
 
+def _sheet_intermodal(wb, df_intermodal: pd.DataFrame):
+    """Pestaña 8: Resultados del análisis intermodal Tren vs Avión."""
+    if df_intermodal is None or df_intermodal.empty:
+        return
+    
+    ws = wb.create_sheet('8_Intermodal_Tren_Avion')
+    _escribir_dataframe_con_formato(ws, df_intermodal)
+    _autoajustar_columnas(ws)
+    _congelar_primera_fila(ws)
+    ws.sheet_view.showGridLines = False
+
+from openpyxl import Workbook # Asegúrate de tener esta importación arriba
+
 def exportar_auditoria_excel(
     df_vuelos_crudo: pd.DataFrame,
-    df_res: pd.DataFrame,
+    escenarios_dict: dict,
+    df_dashboard: pd.DataFrame,
     df_slots: pd.DataFrame,
     params: dict,
     h_noreg: int,
     timeline: pd.DataFrame,
     r_min_newell: float,
     path: str,
-    df_res_comprimido: pd.DataFrame = None, 
+    df_res_comprimido: pd.DataFrame = None,
+    df_intermodal: pd.DataFrame = None, 
 ) -> None:
     """
-    Construye el Excel maestro de auditoria.
-
-    Args:
-        df_vuelos_crudo: DataFrame original pre-GDP.
-        df_res:          Resultados del GDP (RBS Base).
-        df_slots:        Matriz de slots generados (RBS Base).
-        params:          Parametros del escenario (AAR, PAAR, H_START...).
-        h_noreg:         Minuto del dia en que la cola se disuelve.
-        timeline:        Curvas de Newell minuto a minuto.
-        r_min_newell:    Retraso minimo teorico calculado.
-        path:            Ruta completa del .xlsx de salida.
-        df_res_comprimido: Resultados tras aplicar penalización y compresión.
+    Construye el Excel maestro de auditoría sin hojas vacías y con orden correcto.
     """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
-        with pd.ExcelWriter(path, engine='openpyxl') as writer:
-            pd.DataFrame().to_excel(writer, sheet_name='_tmp')
+        # 1. Creamos un Workbook nuevo desde cero (esto evita la "Hoja1" de Pandas)
+        wb = Workbook()
+        # openpyxl crea una hoja por defecto llamada 'Sheet', la borramos para que no estorbe
+        default_sheet = wb.active
+        wb.remove(default_sheet)
 
-        wb = load_workbook(path)
-        if '_tmp' in wb.sheetnames:
-            del wb['_tmp']
+        # 2. Pestañas Globales (Ordenadas)
+        _sheet_dashboard_comparativo(wb, df_dashboard)      # 00_Dashboard
+        _sheet_parametros(wb, params, h_noreg, r_min_newell) # 0_Parametros
+        _sheet_datos_crudos(wb, df_vuelos_crudo)             # 1_Datos_Crudos
+        # Nota: La pestaña 2 son las "Audit_..." que se crean abajo
+        _sheet_matriz_slots(wb, df_slots)                    # 3_Matriz_Slots
 
-        # Llamadas a las pestañas
-        _sheet_parametros(wb, params, h_noreg, r_min_newell)
-        _sheet_datos_crudos(wb, df_vuelos_crudo)
-        _sheet_regulacion_gdp(wb, df_res)
-        _sheet_matriz_slots(wb, df_slots)
-        if df_res_comprimido is not None:
-            _sheet_regulacion_comprimida(wb, df_res, df_res_comprimido)
-        _sheet_kpis_comparativa(wb, df_res)
-        _sheet_analisis_retrasos(wb, df_res, df_slots)
-        _sheet_equidad_rbs(wb, df_res)
+        # 3. Pestañas de Auditoría por Escenario (Dinámicas)
+        for nombre_escenario, df_escenario in escenarios_dict.items():
+            if df_escenario is not None and not df_escenario.empty:
+                _sheet_regulacion_escenario(wb, df_escenario, f"Audit_{nombre_escenario}")
+
+        # 4. Análisis Detallados
+        if 'GDP_RBS' in escenarios_dict:
+            # Forzamos los números para que no se salten
+            _sheet_regulacion_comprimida(wb, escenarios_dict['GDP_RBS'], df_res_comprimido) # Debería ser la 4
+            _sheet_kpis_comparativa(wb, escenarios_dict['GDP_RBS'])   # 5
+            _sheet_analisis_retrasos(wb, escenarios_dict['GDP_RBS'], df_slots) # 6
+            _sheet_equidad_rbs(wb, escenarios_dict['GDP_RBS'])        # 7
+            
+        # 5. Módulo Intermodal (Pestaña 8)
+        if df_intermodal is not None:
+            _sheet_intermodal(wb, df_intermodal)
+        else:
+            print("⚠️ ADVERTENCIA: df_intermodal llegó vacío al exportador.")
 
         wb.save(path)
-        print(f"✅ Excel de auditoria generado en: {path}")
+        print(f"   ✅ Excel consolidado con éxito en: {path}")
 
-    except PermissionError:
-        print("⚠️  ERROR: Cierra el archivo Excel antes de ejecutar el script.")
     except Exception as e:
-        print(f"❌ Error inesperado al generar el Excel: {e}")
+        print(f"\n❌ Error al generar el Excel: {e}")
         raise
+
+def _sheet_dashboard_comparativo(wb, df_dashboard: pd.DataFrame) -> None:
+    """Escribe el DataFrame del Dashboard en la primera hoja aplicando los estilos corporativos."""
+    ws = wb.create_sheet(title="00_Dashboard_KPIs", index=0)
+    
+    _escribir_dataframe_con_formato(ws, df_dashboard)
+    _autoajustar_columnas(ws)
+    _congelar_primera_fila(ws)
+    ws.sheet_view.showGridLines = False

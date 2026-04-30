@@ -52,8 +52,24 @@ APU_FUEL_KG_PER_MIN = {
     'F': 0.25,
 }
 
+APU_MANDATORY_MINUTES = 0
+
 # Factor conversión fuel → CO2. Fuente: ICAO Carbon Emissions Calculator, v11.
 CO2_PER_KG_FUEL = 3.16
+
+# Factor de emisión de la red eléctrica en España (kg CO2 / kWh) 
+# Fuente: Red Eléctrica de España (REE) / MITERD 2023
+GRID_EMISSION_FACTOR_KG_KWH = 0.283 
+
+# Consumo eléctrico demandado por categoría RECAT en kW
+FEGP_KW_PER_RECAT = {
+    'A': 288.0,  # A388: 4 x 90 kVA (360 kVA * 0.8 = 288 kW)
+    'B': 144.0,  # B789: 2 x 90 kVA (180 kVA * 0.8 = 144 kW)
+    'C': 144.0,  # B764: 2 x 90 kVA (180 kVA * 0.8 = 144 kW)
+    'D': 72.0,   # A320: 1 x 90 kVA (90 kVA * 0.8 = 72 kW)
+    'E': 32.0,   # E190: Límite del bus interno (40 kVA * 0.8 = 32 kW)
+    'F': 12.8,   # PC24: 28.5 VDC * 450 Amperios continuos = 12.8 kW
+}
 
 
 # =============================================================================
@@ -311,14 +327,16 @@ def calcular_rf_unitario(df_vuelos: pd.DataFrame) -> pd.Series:
 def calcular_rf_emisiones(df_vuelos: pd.DataFrame) -> pd.Series:
     """
     Task 2: r_f = CO₂ por minuto de retraso (kg/min).
-    Candidatos GDP → APU en tierra.
-    Exentos        → tasa crucero en aire.
+    Candidatos GDP → FEGP en tierra (Red Eléctrica).
+    Exentos        → Tasa crucero en aire (Queroseno).
     """
     def _apply_co2(fila):
         if fila.get('flight_status') == FS_CANDIDATE:
             recat_str = str(fila.get('recat', 'D')).upper()
-            fuel_min  = APU_FUEL_KG_PER_MIN.get(recat_str, 1.16)
-            return fuel_min * CO2_PER_KG_FUEL
+            potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 72.0)
+            # Emisiones por minuto conectado al aeropuerto
+            co2_fegp_min = potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
+            return co2_fegp_min
 
         distancia = float(fila.get('distancia_km', 0) or 0)
         asientos  = int(fila.get('size_seats_avg', 180) or 180)
@@ -620,16 +638,21 @@ def calcular_kpis_ghp(
             duracion_min=max(float(row.get('duracion_vuelo_min', 60) or 60), 1),
         )
 
-    def _get_apu_co2(recat):
+# Dentro de calcular_kpis_ghp(), sustituye _get_apu_co2 por esto:
+    def _get_fegp_co2(recat):
         recat_str = str(recat).upper() if pd.notna(recat) else 'D'
-        return APU_FUEL_KG_PER_MIN.get(recat_str, 1.16) * CO2_PER_KG_FUEL
+        potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 72.0)
+        return potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
 
     co2_rate_aire   = df.apply(_co2_rate_aire, axis=1)
-    co2_rate_tierra = df.get('recat', pd.Series('D', index=df.index)).apply(_get_apu_co2)
+    co2_rate_tierra = df.get('recat', pd.Series('D', index=df.index)).apply(_get_fegp_co2)
 
     co2_aire_delay   = (co2_rate_aire   * df['air_delay']).sum()
     co2_tierra_delay = (co2_rate_tierra * df['ground_delay']).sum()
     co2_total_delay  = co2_aire_delay + co2_tierra_delay
+    
+    # IMPORTANTE: Asegúrate de que el diccionario final retorne esto:
+    # 'co2_tierra_fegp_delay_kg': round(co2_tierra_delay, 2),
 
     # --- Coste del retraso — Cook & Tanner (2015), Tables 22-29 ---
     #
