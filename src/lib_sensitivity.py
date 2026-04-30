@@ -57,7 +57,7 @@ HEATMAPS = [
     ('air_delay_total',     'Trade-off: Total AIR Delay',               'min', 'min'),
     ('co2_tierra_delay',    'CO2 Emissions Due to GROUND Delay',        'kg',  'min'),
     ('co2_aire_delay',      'CO2 Emissions Due to AIR Delay',           'kg',  'min'),
-    ('unrecoverable_delay', 'Irrecoverable Delay (GDP cancelled)',      'min', 'min'),
+    ('unrecoverable_delay', 'Unrecoverable Delay (GDP cancelled)',      'min', 'min'),
     # --- KPIs de valor añadido (aportación del equipo) ---
     ('co2_savings',         'Net CO2 Savings vs. Do-Nothing',           'kg',  'max'),
     ('cost_savings',        'Total Economic Savings vs. Do-Nothing',    'EUR', 'max'),

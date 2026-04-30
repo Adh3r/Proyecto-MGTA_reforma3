@@ -31,6 +31,11 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
     peores_vuelos = candidatos.nlargest(num_penalizados, 'total_delay')
     #nlargest --> returns the n rows hith higher values in the selected column
 
+    # identify the most affected airline
+    counts_afectados = peores_vuelos['airline'].value_counts()
+    top_airline = counts_afectados.index[0] if not counts_afectados.empty else "N/A"
+    top_count = counts_afectados.max() if not counts_afectados.empty else 0
+
     #free the slots but save the airline-ownership
     slots_liberados = peores_vuelos[['assigned_slot', 'airline']].dropna()
     slots_abiertos = [ {'time': row['assigned_slot'], 'airline': row['airline']} for _, row in slots_liberados.iterrows()]
@@ -43,6 +48,9 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
     
     # sort the slot list 
     slots_abiertos = sorted(slots_abiertos, key=lambda x: x['time'])
+
+    v_movidos = 0
+    ahorro_min = 0
 
     # COMPRESSION ALGORITHM
     while slots_abiertos:
@@ -83,6 +91,10 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
         slot_dejado_libre = df.at[vuelo_seleccionado_idx, 'assigned_slot']
         aerolinea_que_deja_slot = df.at[vuelo_seleccionado_idx, 'airline']
 
+        # Saving time
+        v_movidos += 1
+        ahorro_min += (slot_dejado_libre - t_slot)
+
         #move the flight to the new slot
         df.at[vuelo_seleccionado_idx, 'assigned_slot'] = t_slot
 
@@ -92,6 +104,11 @@ def penalty_and_compression(df_vuelos_asignados: pd.DataFrame, num_penalizados: 
         # Resort the list to ensure we always give priority to the earliest
         slots_abiertos = sorted(slots_abiertos, key=lambda x: x['time'])
 
-    return df
+    # Results printed in core
+    print(f"\n--- REPORTE DE COMPRESIÓN ---")
+    print(f"Aerolínea más afectada (penalizaciones): {top_airline} con {top_count} vuelos")
+    print(f"Vuelos modificados por compresión: {v_movidos}")
+    print(f"Delay total ahorrado: {ahorro_min:.2f} minutos")
+    print(f"-----------------------------\n")
 
-    
+    return df

@@ -704,3 +704,21 @@ if __name__ == "__main__":
 
     print(f"✅ Excel de etiquetado generado en: {p_debug}")
     print("   → Abre el archivo y verifica que los filtros ECAC, distancia y Airborne son correctos.")
+
+    resultados = ejecutar_nucleo_gdp(df_vuelos, params)
+    df_resultado = resultados['vuelos_asignados']
+    h_noreg = resultados['h_noreg']
+    print(f"\n🚀 RESULTADOS DE SIMULACIÓN:")
+    horas = h_noreg // 60
+    minutos = h_noreg % 60
+    print(f"   • Hora de recuperación estimada: {horas:02d}:{minutos:02d}")
+
+    kpis = calcular_kpis_economicos(df_resultado)
+    
+    # 3. Extraemos y printeamos el valor
+    unrecoverable = kpis['unrecoverable_delay']
+    
+    print("-" * 30)
+    print(f"📊 KPI OPERACIONAL:")
+    print(f"   • Unrecoverable Delay: {unrecoverable} minutos")
+    print("-" * 30)
