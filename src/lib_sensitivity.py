@@ -244,7 +244,7 @@ def ejecutar_analisis_sensibilidad(
 
         # Construimos la ruta de salida del PNG
         nombre_archivo = nombre_kpi.replace('_', '-')
-        ruta_png = os.path.join(carpeta_heatmaps, f"heatmap_{nombre_archivo}.png")
+        ruta_png = os.path.join(carpeta_heatmaps, f"heatmap_{nombre_archivo}.svg")
 
         # Llamamos a la función de visualización con todos los datos preparados
         vis.generar_heatmap(

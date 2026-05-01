@@ -2,11 +2,11 @@
 # src/lib_visualization.py
 # MÓDULO DE VISUALIZACIÓN — Gráficos, diagramas y heatmaps del simulador.
 #
-# Este módulo contiene TODAS las funciones que generan imágenes PNG.
+# Este módulo contiene TODAS las funciones que generan imágenes vectoriales (SVG).
 # Ninguna otra función de cálculo vive aquí — solo visualización.
 #
 # GRÁFICOS DEL ESCENARIO BASE (Fase 2):
-#   1. plot_newell()              → Diagrama de flujo acumulado (curvas de Newell)
+#   1. plot_queue_evolution()     → Evolución de la cola de aeronaves Q(t)
 #   2. plot_balance_capacidad()   → Demanda horaria vs. tráfico real servido
 #   3. plot_impacto_economico()   → Coste Do-Nothing vs. GDP (barras)
 #   4. plot_equidad_aerolineas()  → Retraso medio por aerolínea (Top 10)
@@ -46,10 +46,9 @@ def generar_heatmap(
     ruta_salida: str,
     fila_optima: int,
     columna_optima: int,
-    
 ) -> None:
     """
-    Genera y guarda un heatmap de una matriz KPI en función de R y HFile.
+    Genera y guarda un heatmap vectorial de una matriz KPI en función de R y HFile.
 
     QUÉ ES UN HEATMAP:
         Un heatmap es una tabla donde cada celda tiene un color que representa
@@ -64,19 +63,12 @@ def generar_heatmap(
         plt.get_cmap('RdYlGn', 5) obtiene la paleta Rojo-Amarillo-Verde
         dividida en exactamente 5 tonos.
 
-    CÓMO FUNCIONAN LOS PERCENTILES COMO LÍMITES:
-        Si usáramos el mínimo y máximo absolutos como límites de color,
-        un único valor extremo (outlier) haría que todas las demás celdas
-        tuvieran prácticamente el mismo color.
-        Usar los percentiles 10 y 90 como límites ignora los extremos y
-        concentra el contraste en el rango donde están la mayoría de los valores.
-
     Args:
         df_matriz:      Matriz 2D pivotada (filas=HFile, columnas=R, valores=KPI).
         titulo:         Título del gráfico (nombre del KPI).
         unidad:         Unidad de medida para la barra de color ('min', 'kg', 'EUR').
         mejor:          'min' si el valor menor es mejor, 'max' si el mayor es mejor.
-        ruta_salida:    Ruta completa del archivo PNG de salida.
+        ruta_salida:    Ruta completa del archivo SVG de salida.
         fila_optima:    Índice de fila de la celda óptima (para marcarla).
         columna_optima: Índice de columna de la celda óptima (para marcarla).
     """
@@ -96,7 +88,6 @@ def generar_heatmap(
     limite_superior = todos_los_valores.max()
 
     # Protección de seguridad: LogNorm falla si hay valores <= 0. 
-    # Si el mínimo es 0 (ej. algún retraso irrecuperable perfecto), lo subimos a 1 para el color.
     if limite_inferior <= 0:
         limite_inferior = 0.1 
 
@@ -111,7 +102,7 @@ def generar_heatmap(
         annot=True,
         fmt=formato_numero,
         cmap=paleta_continua,
-        norm=LogNorm(vmin=limite_inferior, vmax=limite_superior), # <--- ESTE ES EL TRUCO MAGNÍFICO
+        norm=LogNorm(vmin=limite_inferior, vmax=limite_superior),
         cbar_kws={'label': unidad},
         linewidths=1.5,
         linecolor='white',
@@ -125,16 +116,7 @@ def generar_heatmap(
     ax.set_ylabel('T File Offset (min)',          fontsize=11, fontweight='bold')
     ax.set_title(titulo.upper(), fontsize=13, fontweight='bold', pad=20)
 
-    # -------------------------------------------------------------------------
     # MARCAR LA CELDA ÓPTIMA CON UN RECUADRO AZUL
-    #
-    # ax.add_patch() añade una figura geométrica encima del heatmap.
-    # plt.Rectangle((x, y), ancho, alto) define un rectángulo.
-    # Las coordenadas (x, y) en un heatmap de seaborn corresponden a
-    # (columna, fila) contando desde la esquina superior izquierda.
-    # fill=False hace que el rectángulo sea solo el borde, sin relleno.
-    # zorder=15 asegura que el recuadro se dibuje por encima de todo lo demás.
-    # -------------------------------------------------------------------------
     ax.add_patch(plt.Rectangle(
         (columna_optima, fila_optima), 1, 1,
         fill=False, edgecolor='blue', linewidth=4, zorder=15,
@@ -142,8 +124,8 @@ def generar_heatmap(
 
     # Texto "★ BEST" dentro de la celda óptima
     ax.text(
-        columna_optima + 0.5,   # Centro horizontal de la celda
-        fila_optima + 0.9,      # Cerca del borde inferior de la celda
+        columna_optima + 0.5,
+        fila_optima + 0.9,
         '★ BEST',
         ha='center', va='bottom',
         fontsize=10, color='blue', fontweight='bold',
@@ -152,12 +134,12 @@ def generar_heatmap(
 
     plt.tight_layout()
     os.makedirs(os.path.dirname(ruta_salida), exist_ok=True)
-    plt.savefig(ruta_salida, dpi=200, bbox_inches='tight')
+    plt.savefig(ruta_salida, format='svg', transparent=True, bbox_inches='tight')
     plt.close()
 
 
 # =============================================================================
-# GRÁFICO 1: DIAGRAMA DE NEWELL — CURVAS ACUMULADAS
+# GRÁFICO 1: EVOLUCIÓN DE LA COLA (QUEUE LENGTH)
 # =============================================================================
 
 def plot_newell(
@@ -221,7 +203,7 @@ def plot_newell(
     plt.legend()
     plt.grid(True, alpha=0.4)
     plt.tight_layout()
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+    plt.savefig(ruta_salida, format='svg', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -236,57 +218,31 @@ def plot_balance_capacidad(
     ruta_salida: str,
 ) -> None:
     """
-    Genera el gráfico de balance de capacidad hora a hora.
-
-    QUÉ MUESTRA ESTE GRÁFICO:
-        Para cada hora del día, tres valores:
-        - Barras azules (demanda original): cuántos vuelos tenían ETA en esa hora.
-        - Barras oscuras (tráfico servido): cuántos vuelos aterrizaron realmente.
-        - Línea rosa (límite de capacidad): cuántos podría aceptar el aeropuerto.
-
-        Durante el GDP (LVP activo), la línea de capacidad baja a PAAR.
-        El gap entre la demanda y la capacidad = vuelos que acumulan retraso.
-
-    CÓMO SE CALCULA EL TRÁFICO SERVIDO POR HORA:
-        Tomamos la curva de capacidad acumulada del timeline y calculamos
-        cuánto sube en cada hora: capacidad(h+1) - capacidad(h) = vuelos servidos esa hora.
+    Genera el gráfico vectorial de balance de capacidad hora a hora.
 
     Args:
         timeline:    DataFrame con la curva de capacidad acumulada por minuto.
         df_vuelos:   Tabla de vuelos con la ETA de cada uno.
         params:      Parámetros del GDP (H_START, H_END, AAR, PAAR).
-        ruta_salida: Ruta completa del PNG de salida.
+        ruta_salida: Ruta completa del SVG de salida.
     """
     plt.figure(figsize=(12, 6))
 
-    # -------------------------------------------------------------------------
-    # DEMANDA HORARIA: agrupar vuelos por hora de su ETA
-    # // 60 es la división entera: convierte minutos a hora del día (0-23)
-    # .reindex(range(24), fill_value=0) garantiza que las 24 horas aparecen
-    # aunque alguna hora no tenga ningún vuelo programado.
-    # -------------------------------------------------------------------------
     df_copia = df_vuelos.copy()
     df_copia['hora'] = (df_copia['minutes_eta'] // 60).astype(int)
     demanda_horaria = df_copia.groupby('hora').size().reindex(range(24), fill_value=0)
 
-    # -------------------------------------------------------------------------
-    # TRÁFICO SERVIDO: cuánto sube la capacidad acumulada en cada hora
-    # -------------------------------------------------------------------------
     trafico_servido_por_hora = []
     for hora in range(24):
         minuto_inicio = hora * 60
         minuto_fin    = min((hora + 1) * 60, 1440)
 
         capacidad_inicio = timeline.loc[minuto_inicio, 'capacity_accum']
-        # Para la última hora usamos el minuto 1439 (no existe el 1440)
         indice_fin       = minuto_fin - 1 if minuto_fin == 1440 else minuto_fin
         capacidad_fin    = timeline.loc[indice_fin, 'capacity_accum']
 
         trafico_servido_por_hora.append(capacidad_fin - capacidad_inicio)
 
-    # -------------------------------------------------------------------------
-    # PERFIL DE CAPACIDAD: PAAR durante el GDP, AAR fuera
-    # -------------------------------------------------------------------------
     hora_inicio_gdp = int(params['H_START'] / 60)
     hora_fin_gdp    = int(params['H_END']   / 60)
 
@@ -299,7 +255,6 @@ def plot_balance_capacidad(
     plt.bar(horas, demanda_horaria,        color='cornflowerblue', alpha=0.5, width=0.8, edgecolor='black', label='Original Demand (ETA)')
     plt.bar(horas, trafico_servido_por_hora, color='midnightblue', alpha=0.8, width=0.4, edgecolor='black', label='Actual Traffic Served')
 
-    # plt.step() dibuja una línea escalonada (plana dentro de cada hora)
     plt.step(horas, capacidad_por_hora, where='mid', color='hotpink', linewidth=3, label='Capacity Limit')
 
     plt.title('Impact of LVP Regulation: Demand vs. Actual Flow', fontsize=20, fontweight='bold')
@@ -309,7 +264,7 @@ def plot_balance_capacidad(
     plt.legend(loc='upper left')
     plt.grid(True, axis='y', linestyle='--', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+    plt.savefig(ruta_salida, format='svg', transparent=True, bbox_inches='tight')
     plt.close()
 
 
@@ -319,20 +274,13 @@ def plot_balance_capacidad(
 
 def plot_impacto_economico(df_res: pd.DataFrame, ruta_salida: str) -> None:
     """
-    Genera el gráfico de barras comparando el coste del escenario Do-Nothing
-    (sin GDP, todo el retraso en el aire) contra el escenario con GDP.
-
-    QUÉ MUESTRA ESTE GRÁFICO:
-        Dos barras de colores:
-        - Roja:  coste total si NO hubiera GDP (todo el retraso en el aire, caro).
-        - Verde: coste total CON GDP (parte del retraso transferido a tierra, barato).
-        La diferencia entre ambas barras = ahorro económico del GDP.
+    Genera el gráfico vectorial de barras comparando el coste del escenario Do-Nothing
+    contra el escenario con GDP.
 
     Args:
         df_res:      Tabla de resultados del GDP con retrasos calculados.
-        ruta_salida: Ruta completa del PNG de salida.
+        ruta_salida: Ruta completa del SVG de salida.
     """
-    # Usamos la función centralizada de KPIs — mismos números que el Excel
     kpis = calcular_kpis_economicos(df_res)
 
     etiquetas = [
@@ -351,23 +299,21 @@ def plot_impacto_economico(df_res: pd.DataFrame, ruta_salida: str) -> None:
     plt.title("GDP Cost Savings vs. Do-Nothing Scenario", fontsize=14, fontweight='bold')
     plt.ylabel("Estimated Total Cost (EUR)", fontsize=12)
 
-    # Añadimos un 30% de margen arriba para que las etiquetas de valor no queden cortadas
     valor_maximo = max(valores)
     plt.ylim(0, valor_maximo * 1.30)
 
-    # Etiqueta numérica encima de cada barra
     for barra in barras:
         altura = barra.get_height()
         plt.text(
-            barra.get_x() + barra.get_width() / 2,  # Centro horizontal de la barra
-            altura + (valor_maximo * 0.03),           # Ligeramente por encima de la barra
+            barra.get_x() + barra.get_width() / 2,
+            altura + (valor_maximo * 0.03),
             f"EUR {int(altura):,}",
             ha='center', va='bottom', fontweight='bold', fontsize=11,
         )
 
     plt.grid(axis='y', linestyle='--', alpha=0.5)
     plt.tight_layout()
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+    plt.savefig(ruta_salida, format='svg', transparent=True, bbox_inches='tight')
     plt.close()
 
 
@@ -377,28 +323,15 @@ def plot_impacto_economico(df_res: pd.DataFrame, ruta_salida: str) -> None:
 
 def plot_equidad_aerolineas(df_res: pd.DataFrame, ruta_salida: str) -> None:
     """
-    Genera el gráfico de equidad del algoritmo RBS por aerolínea (Top 10).
-
-    QUÉ MUESTRA ESTE GRÁFICO:
-        El retraso medio de cada una de las 10 aerolíneas con más vuelos.
-        La línea roja horizontal es el retraso medio global.
-
-        Si el algoritmo RBS es equitativo, las barras deberían ser similares
-        entre sí y aproximarse a la línea media. Si una aerolínea tiene
-        muchas más barras altas que otras, hay un sesgo de equidad.
-
-        NOTA: Pequeñas diferencias son normales porque el RBS asigna por ETA,
-        y las aerolíneas tienen distribuciones de ETA distintas.
+    Genera el gráfico vectorial de equidad del algoritmo RBS por aerolínea (Top 10).
 
     Args:
         df_res:      Tabla de resultados del GDP con retrasos por vuelo.
-        ruta_salida: Ruta completa del PNG de salida.
+        ruta_salida: Ruta completa del SVG de salida.
     """
-    # Seleccionamos solo las 10 aerolíneas con más vuelos en la ventana GDP
     top_10_aerolineas = df_res['airline'].value_counts().head(10).index
     df_top10 = df_res[df_res['airline'].isin(top_10_aerolineas)]
 
-    # Calculamos el retraso medio por aerolínea y ordenamos de mayor a menor
     retraso_medio_por_aerolinea = (
         df_top10.groupby('airline')['total_delay']
         .mean()
@@ -412,7 +345,6 @@ def plot_equidad_aerolineas(df_res: pd.DataFrame, ruta_salida: str) -> None:
         color='mediumpurple', edgecolor='black', alpha=0.8,
     )
 
-    # Línea de referencia: retraso medio global (sobre TODOS los vuelos, no solo Top 10)
     retraso_medio_global = df_res['total_delay'].mean()
     plt.axhline(
         y=retraso_medio_global,
@@ -426,9 +358,8 @@ def plot_equidad_aerolineas(df_res: pd.DataFrame, ruta_salida: str) -> None:
     plt.legend()
     plt.grid(axis='y', linestyle='--', alpha=0.6)
     plt.tight_layout()
-    plt.savefig(ruta_salida, dpi=300, bbox_inches='tight')
+    plt.savefig(ruta_salida, format='svg', transparent=True, bbox_inches='tight')
     plt.close()
-
 
 # =============================================================================
 # ORQUESTADOR: GENERA LOS 4 GRÁFICOS DEL ESCENARIO BASE
@@ -444,40 +375,32 @@ def generar_graficos_fase2(
 ) -> None:
     """
     Llama a los 4 gráficos del escenario base en orden.
-
-    Esta función no tiene lógica propia — solo organiza las llamadas.
-    Si necesitas añadir un gráfico nuevo, añade su función plot_X() arriba
-    y llámala aquí.
-
-    Args:
-        timeline:  DataFrame con las curvas de Newell minuto a minuto.
-        df_vuelos: Tabla de vuelos original (para el gráfico de demanda horaria).
-        df_res:    Tabla de resultados del GDP con retrasos calculados.
-        params:    Parámetros del GDP (H_START, H_END, AAR, PAAR...).
-        h_noreg:   Minuto en que la cola desaparece.
-        paths:     Diccionario con las rutas de salida {'cum': ..., 'bal': ...}.
+    Corrige automáticamente las extensiones a .svg si vienen como .png desde fuera.
     """
-    # Creamos la carpeta de salida si no existe
     carpeta_figuras = os.path.dirname(paths['cum'])
     os.makedirs(carpeta_figuras, exist_ok=True)
 
-    # Gráfico 1: Curvas acumuladas de Newell
-    plot_newell(timeline, params, h_noreg, paths['cum'])
+    # Forzamos que las rutas terminen en .svg reemplazando la extensión
+    ruta_cum = paths['cum'].replace('.png', '.svg')
+    ruta_bal = paths['bal'].replace('.png', '.svg')
+
+    # Gráfico 1: Evolución de la cola
+    plot_newell(timeline, params, h_noreg, ruta_cum)
 
     # Gráfico 2: Balance de capacidad horario
-    plot_balance_capacidad(timeline, df_vuelos, params, paths['bal'])
+    plot_balance_capacidad(timeline, df_vuelos, params, ruta_bal)
 
-    # Gráficos 3 y 4: construimos sus rutas a partir de la carpeta del gráfico 1
+    # Gráficos 3 y 4: construimos sus rutas directamente en SVG
     plot_impacto_economico(
         df_res,
-        os.path.join(carpeta_figuras, '3_impacto_economico.png'),
+        os.path.join(carpeta_figuras, '3_impacto_economico.svg'),
     )
     plot_equidad_aerolineas(
         df_res,
-        os.path.join(carpeta_figuras, '4_equidad_aerolineas.png'),
+        os.path.join(carpeta_figuras, '4_equidad_aerolineas.svg'),
     )
 
-    print("   -> 4 gráficos generados en output/figures/")
+    print("   -> 4 gráficos (SVG) generados en output/figures/")
 
 
 # =============================================================================
@@ -505,10 +428,11 @@ if __name__ == "__main__":
     print("   -> Ejecutando simulación GDP (Fase 2)...")
     resultados = gdp.ejecutar_nucleo_gdp(df_vuelos, params)
 
-    print("   -> Generando gráficos de prueba...")
+    print("   -> Generando gráficos vectoriales de prueba...")
+    # Aseguramos que el test también usa extensiones .svg
     rutas_test = {
-        'cum': os.path.join(carpeta_test, '1_newell_test.png'),
-        'bal': os.path.join(carpeta_test, '2_balance_test.png'),
+        'cum': os.path.join(carpeta_test, '1_queue_test.svg'),
+        'bal': os.path.join(carpeta_test, '2_balance_test.svg'),
     }
 
     generar_graficos_fase2(
@@ -520,4 +444,4 @@ if __name__ == "__main__":
         paths     = rutas_test,
     )
 
-    print(f"\n✅ Prueba superada. Gráficos guardados en: {carpeta_test}")
+    print(f"\n✅ Prueba superada. Gráficos vectoriales guardados en: {carpeta_test}")

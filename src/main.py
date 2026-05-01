@@ -120,20 +120,24 @@ def ejecutar_proyecto_completo() -> None:
     # -------------------------------------------------------------------------
     df_tabla_intermodal = None
     try:
-        resultados_wp4 = inter.ejecutar_analisis_intermodal(df_vuelos, resultados, params, BASE_DIR)
+        # [MODIFICACIÓN CLAVE] Pasamos resultados_ghp como tercer argumento
+        resultados_wp4 = inter.ejecutar_analisis_intermodal(df_vuelos, resultados, resultados_ghp, params, BASE_DIR)
         
         if isinstance(resultados_wp4, dict):
             # 1. Capturamos la tabla comparativa (KGs de CO2, tiempos, ahorros) para la Pestaña 8
             df_tabla_intermodal = resultados_wp4['df_comparativa']
             
-            # 2. Capturamos el listado de vuelos re-simulados para la pestaña Audit_Intermodal
-            df_vuelos_intermodal = resultados_wp4['resultados_reducido']['resultados_gdp']['vuelos_asignados']
+            # 2. Capturamos los resultados del GHP para las DOS funciones de coste
+            df_intermodal_coste = resultados_wp4['resultados_reducido']['resultados_ghp']['task3_cost']
+            df_intermodal_co2 = resultados_wp4['resultados_reducido']['resultados_ghp']['task2_emissions']
             
-            # 3. Lo inyectamos en el diccionario general de escenarios
-            escenarios_dict['Intermodal'] = df_vuelos_intermodal
+            # 3. Los inyectamos en el diccionario general de escenarios
+            escenarios_dict['Intermodal_GHP_Coste'] = df_intermodal_coste
+            escenarios_dict['Intermodal_GHP_CO2'] = df_intermodal_co2
             
             # 4. Actualizamos el Dashboard general (WP5)
-            lista_kpis.append(evaluar_escenario(df_vuelos_intermodal, 'Intermodal', h_start_min))
+            lista_kpis.append(evaluar_escenario(df_intermodal_coste, 'Intermodal_GHP_Coste', h_start_min))
+            lista_kpis.append(evaluar_escenario(df_intermodal_co2, 'Intermodal_GHP_CO2', h_start_min))
             df_dashboard = pd.DataFrame(lista_kpis)
             
             print("✅ Datos intermodales procesados y listos para exportar.")
