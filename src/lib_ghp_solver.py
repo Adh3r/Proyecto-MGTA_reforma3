@@ -803,3 +803,10 @@ if __name__ == '__main__':
         print(f"      (primary flights):  {kpis['coste_primary_eur']:.0f} EUR")
         print(f"      (reactionary flts): {kpis['coste_reactionary_eur']:.0f} EUR")
         print(f"    Air infeasible:     {kpis['infeasible_air']} vuelos")
+        if kpis['kpis_aerolinea']:
+            print(f"    KPIs aerolíneas:")
+            for al, kpi in kpis['kpis_aerolinea'].items():
+                print(f"      {al}: n={kpi['n_vuelos']}, "
+                    f"delay_medio={kpi['delay_medio']:.1f}, "
+                    f"delay_total={kpi['delay_total']:.1f}, "
+                    f"delay_std={kpi['delay_std']:.1f}")
