@@ -9,8 +9,8 @@ import pandas as pd
 
 from config import CFG
 import lib_gdp_core as gdp
-from lib_gdp_core import calcular_kpis_economicos
-from lib_ghp_solver import ejecutar_ghp_completo, calcular_kpis_ghp
+from lib_ghp_solver import ejecutar_ghp_completo
+from lib_metrics import evaluar_escenario  # <-- Traemos el motor unificado
 
 # --- CONSTANTES ---
 DISTANCIA_MAX_INTERMODAL_KM = 500
@@ -89,12 +89,12 @@ def generar_comparativa_modal(df_vuelos_regulados: pd.DataFrame) -> pd.DataFrame
             'ADEP': origen,
             'distancia_km': round(distancia, 1),
             'retraso_ATFM_min': round(retraso_min, 1),
-            'tiempo_d2d_avion_NOMINAL_min': round(t_avion_nom, 1), # <-- NUEVO
+            'tiempo_d2d_avion_NOMINAL_min': round(t_avion_nom, 1), 
             'tiempo_d2d_avion_CON_RETRASO_min': round(t_avion_nom + retraso_min, 1),
             'tiempo_d2d_tren_min': round(t_tren, 1),
             'ahorro_tiempo_TREN_min': round((t_avion_nom + retraso_min) - t_tren, 1),
-            'co2_avion_kg': round(co2_avion, 1), # <-- NUEVO
-            'co2_tren_kg': round(co2_tren, 1),   # <-- NUEVO
+            'co2_avion_kg': round(co2_avion, 1), 
+            'co2_tren_kg': round(co2_tren, 1),   
             'ahorro_co2_neto_kg': round(co2_avion - co2_tren, 1),
         })
     return pd.DataFrame(comparativa)
@@ -131,26 +131,33 @@ def generar_comparativa_intermodal(
     verbose: bool = True,
 ) -> pd.DataFrame:
     
-    # --- KPIs ESCENARIO BASE (GHP Cook & Tanner) ---
-    df_base_ghp = resultados_base_ghp['task3_cost'] 
-    kpis_base_eco = calcular_kpis_economicos(df_base_ghp) # <-- Calculamos CO2 estándar
-    kpis_base_ghp = calcular_kpis_ghp(df_base_ghp, resultados_base_ghp.get('rf_coste', 'Base'), 'Base') # <-- Calculamos Coste C&T
-    h_noreg_base = resultados_base_gdp['h_noreg']
-
-    # --- KPIs ESCENARIO INTERMODAL (GHP Cook & Tanner) ---
-    df_red_ghp = resultados_reducido['resultados_ghp']['task3_cost']
-    kpis_red_eco = calcular_kpis_economicos(df_red_ghp) # <-- Calculamos CO2 estándar
-    kpis_red_ghp = calcular_kpis_ghp(df_red_ghp, resultados_reducido['resultados_ghp'].get('rf_coste', 'Red'), 'Intermodal') # <-- Calculamos Coste C&T
+    # 1. Recuperamos el H_START para el motor de métricas
+    h_start_min = resultados_reducido['resultados_gdp']['params'].get('H_START', 0)
     h_noreg_red = resultados_reducido['resultados_gdp']['h_noreg']
 
-    # --- CÁLCULO AHORRO DIRECTO TREN (CO2) ---
+    # 2. Extraemos los DataFrames re-simulados (Intermodales)
+    df_red_GDP  = resultados_reducido['resultados_ghp']['task1_validation']
+    df_red_co2  = resultados_reducido['resultados_ghp']['task2_emissions']
+    df_red_cost = resultados_reducido['resultados_ghp']['task3_cost'] 
+    
+    # 3. Calculamos KPIs con el MISMO MOTOR que el WP3 (lib_metrics)
+    kpis_red_GDP  = evaluar_escenario(df_red_GDP, 'Intermodal_GDP', h_start_min)
+    kpis_red_co2  = evaluar_escenario(df_red_co2, 'Intermodal_CO2', h_start_min)
+    kpis_red_cost = evaluar_escenario(df_red_cost, 'Intermodal_Cost', h_start_min)
+
+    # 4. CÁLCULO AHORRO DIRECTO TREN (CO2)
     df_sub = identificar_vuelos_substituibles(df_vuelos_original, verbose=False)
     df_sub = df_sub[df_sub['es_substituible']]
     co2_vuelos_del = df_sub['co2_kg_vuelo'].sum()
     co2_tren_total = sum(calcular_emision_tren(r['distancia_km'], r['ADEP'], int(r.get('size_seats_avg', ASIENTOS_POR_DEFECTO) * LOAD_FACTOR_POR_DEFECTO)) for _, r in df_sub.iterrows())
     ahorro_co2_tren_directo = co2_vuelos_del - co2_tren_total
 
-    # Crear DataFrame Comparativo
+    # 5. CÁLCULO CO2 TOTAL DEL SISTEMA (Igualando la base del WP3)
+    # Cogemos las emisiones base nominales desde los vuelos asignados para que cuadre exacto con WP3
+    co2_nominal_base = resultados_base_gdp['vuelos_asignados']['co2_kg_vuelo'].sum()
+    co2_nominal_reducido = co2_nominal_base - co2_vuelos_del
+
+    # Crear DataFrame Comparativo usando las claves del nuevo diccionario de KPIs
     comparativa = pd.DataFrame({
         'Métrica': [
             'Demanda total (vuelos)',
@@ -158,45 +165,48 @@ def generar_comparativa_intermodal(
             'HNoReg — Cola disuelta (min UTC)',
             'Duración impacto (min)',
             'Emisiones CO₂ retraso (kg)',
+            'Emisiones CO₂ TOTAL Sistema (kg)', 
             'Coste total retraso (EUR)',
             'Ahorro neto CO₂ directo por Tren (kg)',
         ],
-        'Escenario Base (RBS)': [
-            len(df_base_ghp),
-            round(df_base_ghp['total_delay'].sum(), 1),
-            h_noreg_base,
-            h_noreg_base - resultados_base_gdp['params']['H_START'],
-            round(kpis_base_eco['co2_aire_delay'] + kpis_base_eco['co2_tierra_delay'], 1), # <-- USAMOS KPI ECO
-            int(kpis_base_ghp['coste_delay_eur']), # <-- USAMOS KPI GHP
-            'N/A',
-        ],
-        'Escenario Intermodal (RBS Reducido)': [
-            len(df_red_ghp),
-            round(df_red_ghp['total_delay'].sum(), 1),
+        'Intermodal (GDP)': [
+            len(df_red_GDP),
+            round(kpis_red_GDP['Retraso_Total_min'], 1),
             h_noreg_red,
-            h_noreg_red - resultados_reducido['resultados_gdp']['params']['H_START'],
-            round(kpis_red_eco['co2_aire_delay'] + kpis_red_eco['co2_tierra_delay'], 1), # <-- USAMOS KPI ECO
-            int(kpis_red_ghp['coste_delay_eur']), # <-- USAMOS KPI GHP
+            h_noreg_red - h_start_min,
+            round(kpis_red_GDP['CO2_Total_Retraso_kg'], 1),  
+            round(co2_nominal_reducido + kpis_red_GDP['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
+            int(kpis_red_GDP['Coste_Cook_EUR']),         
+            round(ahorro_co2_tren_directo, 1),
+        ],
+        'Intermodal (Opt. Costes)': [
+            len(df_red_cost),
+            round(kpis_red_cost['Retraso_Total_min'], 1),
+            h_noreg_red,
+            h_noreg_red - h_start_min,
+            round(kpis_red_cost['CO2_Total_Retraso_kg'], 1),  
+            round(co2_nominal_reducido + kpis_red_cost['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
+            int(kpis_red_cost['Coste_Cook_EUR']),         
+            round(ahorro_co2_tren_directo, 1),
+        ],
+        'Intermodal (Opt. Emisiones)': [
+            len(df_red_co2),
+            round(kpis_red_co2['Retraso_Total_min'], 1),
+            h_noreg_red,
+            h_noreg_red - h_start_min,
+            round(kpis_red_co2['CO2_Total_Retraso_kg'], 1),  
+            round(co2_nominal_reducido + kpis_red_co2['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
+            int(kpis_red_co2['Coste_Cook_EUR']),         
             round(ahorro_co2_tren_directo, 1),
         ],
     })
 
-    # Calcular la columna de Mejora
-    comparativa['Alivio en Red (Mejora)'] = [
-        round(comparativa.iloc[0,1] - comparativa.iloc[0,2], 1),
-        round(comparativa.iloc[1,1] - comparativa.iloc[1,2], 1),
-        round(comparativa.iloc[2,1] - comparativa.iloc[2,2], 1),
-        round(comparativa.iloc[3,1] - comparativa.iloc[3,2], 1),
-        round(comparativa.iloc[4,1] - comparativa.iloc[4,2], 1),
-        round(float(comparativa.iloc[5,1]) - float(comparativa.iloc[5,2]), 1),
-        round(ahorro_co2_tren_directo, 1)
-    ]
-
     if verbose:
-        print("\n 📊 COMPARATIVA INTERMODAL (ACTUALIZADA COOK & TANNER):")
-        print(f"{'Métrica':>40} {'Escenario Base (RBS)':>25} {'Escenario Intermodal (RBS Reducido)':>35} {'Alivio en Red (Mejora)':>25}")
+        print("\n 📊 COMPARATIVA INTERMODAL Y GHP (TRES ESCENARIOS):")
+        print(f"{'Métrica':>38} | {'Intermodal (GDP)':>18} | {'Intermodal (Opt. Costes)':>25} | {'Intermodal (Opt. Emis.)':>25}")
+        print("-" * 115)
         for _, row in comparativa.iterrows():
-            print(f"{row['Métrica']:>40} {str(row['Escenario Base (RBS)']):>25} {str(row['Escenario Intermodal (RBS Reducido)']):>35} {str(row['Alivio en Red (Mejora)']):>25}")
+            print(f"{row['Métrica']:>38} | {str(row['Intermodal (GDP)']):>18} | {str(row['Intermodal (Opt. Costes)']):>25} | {str(row['Intermodal (Opt. Emisiones)']):>25}")
 
     return comparativa
 

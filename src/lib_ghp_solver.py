@@ -803,3 +803,5 @@ if __name__ == '__main__':
         print(f"      (primary flights):  {kpis['coste_primary_eur']:.0f} EUR")
         print(f"      (reactionary flts): {kpis['coste_reactionary_eur']:.0f} EUR")
         print(f"    Air infeasible:     {kpis['infeasible_air']} vuelos")
+        import pandas as pd
+import os

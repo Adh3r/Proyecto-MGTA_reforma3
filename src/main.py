@@ -104,27 +104,114 @@ def ejecutar_proyecto_completo() -> None:
         escenarios_dict[f'GHP_{nombre_task}'] = df_task
         lista_kpis.append(evaluar_escenario(df_task, f'GHP_{nombre_task}', h_start_min))
     
-    # Construimos el Dashboard Comparativo (DataFrame)
+    # Construimos el Dashboard Comparativo (DataFrame) maestro
     df_dashboard = pd.DataFrame(lista_kpis)
 
-    print("\n   📊 RESUMEN EJECUTIVO (Dashboard Generado):")
-    # Imprimimos de forma elegante algunas columnas clave del Dashboard
-    print(df_dashboard[['Escenario', 'Retraso_Total_min', 'CO2_Total_Retraso_kg', 'Coste_Cook_EUR', 'Equidad_RSD_%']].to_string(index=False))
+    # -------------------------------------------------------------------------
+    # --- REFORMATAR TABLA WP3 PARA IGUALAR A WP4 ---
+    # -------------------------------------------------------------------------
+    
+    # Cálculos previos necesarios para igualar las métricas
+    demanda_total = len(df_final)
+    # Por si la columna de CO2 se genera en otro lado, pillamos de df_final o df_vuelos
+    co2_nominal_base = df_final['co2_kg_vuelo'].sum() if 'co2_kg_vuelo' in df_final.columns else df_vuelos['co2_kg_vuelo'].sum()
+    
+    h_noreg_base = resultados['h_noreg'] 
+    duracion_impacto = h_noreg_base - params.get('H_START', 0)
 
-    path_wp3 = os.path.join(BASE_DIR, 'data/processed/wp3_comparativa_final.csv')
-    df_dashboard.to_csv(path_wp3, index=False)
-    print("\n   ✅ Matriz comparativa Dashboard guardada en CSV.")
+    # Función auxiliar para extraer datos de df_dashboard
+    def get_kpi(escenario, columna):
+        return df_dashboard.loc[df_dashboard['Escenario'] == escenario, columna].iloc[0]
+
+    # Creamos la tabla con la misma estructura exacta que WP4
+    comparativa_wp3 = pd.DataFrame({
+        'Métrica': [
+            'Demanda total (vuelos)',
+            'Retraso total GDP (min)',
+            'HNoReg — Cola disuelta (min UTC)',
+            'Duración impacto (min)',
+            'Emisiones CO₂ retraso (kg)',
+            'Emisiones CO₂ TOTAL Sistema (kg)', 
+            'Coste total retraso (EUR)',
+            'Ahorro neto CO₂ directo por Tren (kg)',
+            'Equidad RSD (%)'
+        ],
+        'GDP (RBS Base)': [
+            demanda_total,
+            round(get_kpi('GDP_RBS', 'Retraso_Total_min'), 1),
+            h_noreg_base,
+            duracion_impacto,
+            round(get_kpi('GDP_RBS', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('GDP_RBS', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('GDP_RBS', 'Coste_Cook_EUR')),
+            'N/A', 
+            round(get_kpi('GDP_RBS', 'Equidad_RSD_%'), 2)
+        ],
+        'GHP (Validación)': [
+            demanda_total,
+            round(get_kpi('GHP_task1_validation', 'Retraso_Total_min'), 1),
+            h_noreg_base,
+            duracion_impacto,
+            round(get_kpi('GHP_task1_validation', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('GHP_task1_validation', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('GHP_task1_validation', 'Coste_Cook_EUR')),
+            'N/A', 
+            round(get_kpi('GHP_task1_validation', 'Equidad_RSD_%'), 2)
+        ],
+        'GHP (Opt. Costes)': [
+            demanda_total,
+            round(get_kpi('GHP_task3_cost', 'Retraso_Total_min'), 1),
+            h_noreg_base,
+            duracion_impacto,
+            round(get_kpi('GHP_task3_cost', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('GHP_task3_cost', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('GHP_task3_cost', 'Coste_Cook_EUR')),
+            'N/A', 
+            round(get_kpi('GHP_task3_cost', 'Equidad_RSD_%'), 2)
+        ],
+        'GHP (Opt. Emisiones)': [
+            demanda_total,
+            round(get_kpi('GHP_task2_emissions', 'Retraso_Total_min'), 1),
+            h_noreg_base,
+            duracion_impacto,
+            round(get_kpi('GHP_task2_emissions', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('GHP_task2_emissions', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('GHP_task2_emissions', 'Coste_Cook_EUR')),
+            'N/A', 
+            round(get_kpi('GHP_task2_emissions', 'Equidad_RSD_%'), 2)
+        ]
+    })
+
+    print("\n 📊 RESUMEN EJECUTIVO WP3 (Sin Intermodalidad):")
+    print(f"{'Métrica':>38} | {'GDP (RBS Base)':>18} | {'GHP (Validación)':>18} | {'GHP (Opt. Costes)':>20} | {'GHP (Opt. Emis.)':>20}")
+    print("-" * 125)
+    for _, row in comparativa_wp3.iterrows():
+        print(f"{row['Métrica']:>38} | {str(row['GDP (RBS Base)']):>18} | {str(row['GHP (Validación)']):>18} | {str(row['GHP (Opt. Costes)']):>20} | {str(row['GHP (Opt. Emisiones)']):>20}")
+
+    # Guardamos ambos (el original crudo para auditoría y el visual para los gráficos)
+    path_wp3_original = os.path.join(BASE_DIR, 'data/processed/wp3_dashboard_crudo.csv')
+    
+    # 🌟 AQUÍ ESTÁ LA MAGIA: Guardamos la comparativa que acabas de construir 
+    # directamente como wp3_resumen_ejecutivo.csv para que la lea el gráfico luego.
+    path_wp3_resumen = os.path.join(BASE_DIR, 'data/processed/wp3_resumen_ejecutivo.csv')
+    
+    df_dashboard.to_csv(path_wp3_original, index=False)
+    comparativa_wp3.to_csv(path_wp3_resumen, index=False)
+    print(f"\n   ✅ Matrices comparativas guardadas en CSV.")
+    print(f"   ✅ Resumen Ejecutivo WP3 exportado a: {path_wp3_resumen}")
+
+    
 
     # -------------------------------------------------------------------------
     # WP4: ANÁLISIS INTERMODAL
     # -------------------------------------------------------------------------
     df_tabla_intermodal = None
     try:
-        # [MODIFICACIÓN CLAVE] Pasamos resultados_ghp como tercer argumento
+        # Pasamos resultados_ghp como tercer argumento
         resultados_wp4 = inter.ejecutar_analisis_intermodal(df_vuelos, resultados, resultados_ghp, params, BASE_DIR)
         
         if isinstance(resultados_wp4, dict):
-            # 1. Capturamos la tabla comparativa (KGs de CO2, tiempos, ahorros) para la Pestaña 8
+            # 1. Capturamos la tabla comparativa para la Pestaña 8
             df_tabla_intermodal = resultados_wp4['df_comparativa']
             
             # 2. Capturamos los resultados del GHP para las DOS funciones de coste

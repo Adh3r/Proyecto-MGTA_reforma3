@@ -75,57 +75,98 @@ def generar_grafica_1_d2d(output_dir, csv_modal_path):
 import os
 import matplotlib.pyplot as plt
 
-def generar_grafica_2_co2(output_dir): 
-    """ 
-    Gráfica 2: El Efecto Multiplicador del CO2 (Donut) 
-    Ajuste de título más cercano a la rosca y márgenes arreglados. 
-    """ 
-    # Ampliamos ligeramente el ancho a 8 para que respiren las etiquetas
-    fig, ax = plt.subplots(figsize=(8, 6)) 
-    
-    # Valores exactos de tu tabla (Escenario Base RBS vs Escenario Intermodal)
-    ahorro_directo = 43000    
-    ahorro_indirecto = 173500 
-    
-    labels = ['Direct Savings\n(Modal Shift)', 'Systemic Savings\n(Network Relief)'] 
-    sizes = [ahorro_directo, ahorro_indirecto] 
-    colors = ['#27AE60', '#3498DB'] 
-    explode = (0, 0.05)  
-    
-    wedges, texts, autotexts = ax.pie( 
-        sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', 
-        shadow=False, startangle=140, pctdistance=0.75, 
-        wedgeprops=dict(width=0.45, edgecolor='w') 
-    ) 
-    
-    plt.setp(autotexts, size=11, weight="bold", color="white") 
-    plt.setp(texts, size=11, fontweight='bold') 
-    
-    # Texto central actualizado con la suma real de tu tabla
-    ax.text(0, 0, 'Total CO2 Savings:\n~216.5 Tons', ha='center', va='center',  
-            fontsize=13, fontweight='bold', color='#333333') 
-    
-    # Título original que preferías
-    ax.set_title('Environmental Multiplier Effect (CO2)', y=0.95, fontweight='bold', fontsize=15) 
-    
-    # Solución al problema de que se corte el SVG: bbox_inches='tight'
-    plt.savefig(os.path.join(output_dir, 'fig2_co2_leverage.svg'), format='svg', transparent=True, bbox_inches='tight') 
-    plt.close()
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
 
-def generar_grafica_3_queue(output_dir, csv_intermodal_path):
+def generar_grafica_2_co2_dinamica(output_dir, csv_wp3_path, csv_wp4_path): 
+    """ 
+    Gráfica 2: El Efecto Multiplicador del CO2 (Donut)
+    Lee dinámicamente de los CSVs de WP3 (Base) y WP4 (Intermodal).
+    """ 
+    # Comprobar que los archivos existen
+    if not os.path.exists(csv_wp3_path) or not os.path.exists(csv_wp4_path):
+        print("⚠️ Faltan los archivos CSV para generar la gráfica de CO2.")
+        return
+
+    try:
+        # Cargar los CSVs y usar 'Métrica' como índice
+        df_wp3 = pd.read_csv(csv_wp3_path)
+        df_wp3.set_index('Métrica', inplace=True)
+        
+        df_wp4 = pd.read_csv(csv_wp4_path)
+        df_wp4.set_index('Métrica', inplace=True)
+        
+        # 1. Extraer Ahorro Directo (El CO2 que dejan de emitir los aviones sustituidos por tren)
+        ahorro_directo = float(df_wp4.loc['Ahorro neto CO₂ directo por Tren (kg)', 'Intermodal (Opt. Costes)'])
+        
+        # 2. Calcular Ahorro Indirecto (CO2 ahorrado por la reducción de la congestión/retraso)
+        # Comparamos el escenario GHP (Opt. Costes) del WP3 vs Intermodal (Opt. Costes) del WP4
+        co2_retraso_base = float(df_wp3.loc['Emisiones CO₂ retraso (kg)', 'GHP (Opt. Costes)'])
+        co2_retraso_opt = float(df_wp4.loc['Emisiones CO₂ retraso (kg)', 'Intermodal (Opt. Costes)'])
+        
+        # Usamos max(0, ...) para evitar números negativos si por alguna rareza el optimizador consume más
+        ahorro_indirecto = max(0, co2_retraso_base - co2_retraso_opt) 
+        
+        # Cálculos para el gráfico
+        total_ahorro_kg = ahorro_directo + ahorro_indirecto
+        total_toneladas = total_ahorro_kg / 1000
+        
+        # Configuración del gráfico
+        fig, ax = plt.subplots(figsize=(8, 6)) 
+        
+        # Hemos añadido el valor en kg a las etiquetas para que sea más informativo
+        labels = [f'Direct Savings\n(Modal Shift)\n{ahorro_directo:,.0f} kg', 
+                  f'Systemic Savings\n(Network Relief)\n{ahorro_indirecto:,.0f} kg'] 
+        sizes = [ahorro_directo, ahorro_indirecto] 
+        colors = ['#27AE60', '#F39C12'] # Verde para tren, Naranja para eficiencia de red
+        explode = (0, 0.05) if ahorro_indirecto > 0 else (0, 0)
+        
+        wedges, texts, autotexts = ax.pie( 
+            sizes, explode=explode, labels=labels, colors=colors, autopct='%1.1f%%', 
+            shadow=False, startangle=140, pctdistance=0.75, 
+            wedgeprops=dict(width=0.45, edgecolor='w') 
+        ) 
+        
+        plt.setp(autotexts, size=11, weight="bold", color="white") 
+        plt.setp(texts, size=10, fontweight='bold') 
+        
+        # Texto central dinámico
+        ax.text(0, 0, f'Total CO2 Savings:\n~{total_toneladas:.1f} Tons', 
+                ha='center', va='center', fontsize=13, fontweight='bold', color='#333333') 
+        
+        ax.set_title('Environmental Multiplier Effect (CO2)', y=0.95, fontweight='bold', fontsize=15) 
+        
+        # Guardar
+        output_path = os.path.join(output_dir, 'fig2_co2_leverage.svg')
+        plt.savefig(output_path, format='svg', transparent=True, bbox_inches='tight') 
+        plt.close()
+        print(f"✅ Gráfica de CO2 generada dinámicamente en: {output_path}")
+        
+    except KeyError as e:
+         print(f"❌ Error al generar la gráfica: No se encontró la columna o fila {e} en los CSV.")
+
+def generar_grafica_3_queue(output_dir, csv_wp3_path, csv_wp4_path):
     """
     Gráfica 3: Queue Length Evolution dinamizada.
+    Lee el escenario base del WP3 y el escenario intermodal del WP4.
     """
-    df = pd.read_csv(csv_intermodal_path)
-    df.set_index('Métrica', inplace=True)
+    # Cargar CSVs
+    df_wp3 = pd.read_csv(csv_wp3_path)
+    df_wp3.set_index('Métrica', inplace=True)
     
-    # Extraer duraciones y vuelos dinámicamente
-    duracion_base = float(df.loc['Duración impacto (min)', 'Escenario Base (RBS)'])
-    duracion_red = float(df.loc['Duración impacto (min)', 'Escenario Intermodal (RBS Reducido)'])
+    df_wp4 = pd.read_csv(csv_wp4_path)
+    df_wp4.set_index('Métrica', inplace=True)
+    
+    # Extraer duraciones y vuelos dinámicamente usando las columnas correctas
+    # Usamos 'GDP (RBS Base)' del WP3 como escenario base
+    duracion_base = float(df_wp3.loc['Duración impacto (min)', 'GDP (RBS Base)'])
+    duracion_red = float(df_wp4.loc['Duración impacto (min)', 'Intermodal (Opt. Costes)'])
     ahorro_tiempo = duracion_base - duracion_red
     
-    vuelos_base = int(df.loc['Demanda total (vuelos)', 'Escenario Base (RBS)'])
-    vuelos_red = int(df.loc['Demanda total (vuelos)', 'Escenario Intermodal (RBS Reducido)'])
+    # Extraer demanda
+    vuelos_base = int(float(df_wp3.loc['Demanda total (vuelos)', 'GDP (RBS Base)']))
+    vuelos_red = int(float(df_wp4.loc['Demanda total (vuelos)', 'Intermodal (Opt. Costes)']))
     vuelos_diff = vuelos_base - vuelos_red
     
     fig, ax = plt.subplots(figsize=(7, 4.5))
@@ -169,6 +210,7 @@ def generar_grafica_3_queue(output_dir, csv_intermodal_path):
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'fig3_queue_evolution.svg'), format='svg', transparent=True)
     plt.close()
+    print(f"✅ Gráfica de Colas (Queue) generada dinámicamente en: {os.path.join(output_dir, 'fig3_queue_evolution.svg')}")
 
 if __name__ == "__main__":
     # Rutas de directorios y archivos
@@ -177,6 +219,7 @@ if __name__ == "__main__":
     os.makedirs(out_dir, exist_ok=True)
     
     # Ajusta estas rutas si tus CSV están en otra carpeta (ej: 'data/processed')
+    path_wp3_csv = os.path.join(base_dir, 'data/processed/wp3_resumen_ejecutivo.csv')
     csv_intermodal = os.path.join(base_dir, 'data', 'processed', 'wp4_comparativa_intermodal.csv')
     csv_modal = os.path.join(base_dir, 'data', 'processed', 'wp4_comparativa_modal.csv')
     
@@ -184,8 +227,8 @@ if __name__ == "__main__":
     
     try:
         generar_grafica_1_d2d(out_dir, csv_modal)
-        generar_grafica_2_co2(out_dir)
-        generar_grafica_3_queue(out_dir, csv_intermodal)
+        generar_grafica_2_co2_dinamica(out_dir, path_wp3_csv, csv_intermodal)
+        generar_grafica_3_queue(out_dir, path_wp3_csv, csv_intermodal)
         print("✅ Gráficos SVG dinámicos generados con éxito.")
     except FileNotFoundError as e:
         print(f"❌ Error: No se encontraron los archivos CSV. Asegúrate de haber ejecutado main.py primero. Detalles: {e}")

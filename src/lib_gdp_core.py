@@ -618,7 +618,7 @@ def ejecutar_nucleo_gdp(
         'flight_id':      None,    # Se rellenará en el Paso 4
     })
 
- # PASO 4: Asignar slots usando el algoritmo RBS
+    # PASO 4: Asignar slots usando el algoritmo RBS
     df_en_ventana = df_vuelos_etiquetados[
         df_vuelos_etiquetados['minutes_eta'] >= params['H_START']
     ].copy()
