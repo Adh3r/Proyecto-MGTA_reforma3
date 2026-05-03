@@ -11,36 +11,36 @@
 #   - CO2: APU en tierra vs. crucero en aire
 #   - COSTE: Cook & Tanner (2015), Tables 11 y 12, ajustado por pasajeros reales
 # =============================================================================
-
+ 
 import numpy as np
 import pandas as pd
 import pulp
-
+ 
 from config import (
     CFG, FS_CANDIDATE, FS_AIRBORNE, FS_INTERNATIONAL, FS_DISTANCE,
     COST_AIR_MIN, COST_GND_MIN,
 )
 from emissions_fuel_model import compute_co2_ask
-
+ 
 # =============================================================================
 # CONSTANTES WP3
 # =============================================================================
-
+ 
 MAX_AIR_DELAY_MIN = 90
-
+ 
 # Load factor europeo. Fuente: IATA Annual Review 2025, promedio europeo: 83,7%
 LOAD_FACTOR_EU = 0.837
-
+ 
 # Turn-around time mínimo por categoría (minutos).
 # Fuente: Eurocontrol Standard Inputs for Economic Analyses, §18
 TAT_MIN = {
     'narrow':  45,   # A320, B737 y similares (RECAT D, E, F)
     'wide':    80,   # A330, B777 y similares (RECAT A, B, C)
 }
-
+ 
 # Umbral OTP: delay < 15 min = "on-time" (IATA/CODA estándar).
 OTP_THRESHOLD_MIN = 15
-
+ 
 # Consumo APU por categoría RECAT (kg fuel/min).
 # Fuente: ICAO Airport Air Quality Manual, Doc 9889.
 APU_FUEL_KG_PER_MIN = {
@@ -51,16 +51,16 @@ APU_FUEL_KG_PER_MIN = {
     'E': 0.66,
     'F': 0.25,
 }
-
+ 
 APU_MANDATORY_MINUTES = 0
-
+ 
 # Factor conversión fuel → CO2. Fuente: ICAO Carbon Emissions Calculator, v11.
 CO2_PER_KG_FUEL = 3.16
-
+ 
 # Factor de emisión de la red eléctrica en España (kg CO2 / kWh) 
 # Fuente: Red Eléctrica de España (REE) / MITERD 2023
 GRID_EMISSION_FACTOR_KG_KWH = 0.283 
-
+ 
 # Consumo eléctrico demandado por categoría RECAT en kW
 FEGP_KW_PER_RECAT = {
     'A': 288.0,  # A388: 4 x 90 kVA (360 kVA * 0.8 = 288 kW)
@@ -70,8 +70,8 @@ FEGP_KW_PER_RECAT = {
     'E': 32.0,   # E190: Límite del bus interno (40 kVA * 0.8 = 32 kW)
     'F': 12.8,   # PC24: 28.5 VDC * 450 Amperios continuos = 12.8 kW
 }
-
-
+ 
+ 
 # =============================================================================
 # TABLAS DE COSTE — Cook & Tanner 2015 (passengerdelaycost.pdf)
 #
@@ -82,9 +82,9 @@ FEGP_KW_PER_RECAT = {
 #
 # Columnas = franjas de delay: 5, 15, 30, 60, 90, 120, 180, 240, 300 min
 # =============================================================================
-
+ 
 _DELAY_BREAKPOINTS = [5, 15, 30, 60, 90, 120, 180, 240, 300]
-
+ 
 # Tabla 12: hard + soft (EUR 2014)
 _COST_TOTAL_TABLE = {
     #           5     15     30      60      90     120     180      240      300
@@ -103,7 +103,7 @@ _COST_TOTAL_TABLE = {
     'AT72': [  20,   120,   440,  1610,  3300,  5400, 10780,  17680,  26010],
     'AT43': [  10,    90,   310,  1120,  2290,  3740,  7460,  12240,  18010],
 }
-
+ 
 # Tabla 11: solo hard (EUR 2014)
 _COST_HARD_TABLE = {
     #           5     15     30      60      90     120     180      240      300
@@ -122,7 +122,7 @@ _COST_HARD_TABLE = {
     'AT72': [  16,   116,   400,  1380,  2840,  4750,  9790,  16360,  24360],
     'AT43': [  11,    80,   280,   950,  1970,  3290,  6780,  11330,  16870],
 }
-
+ 
 # Pasajeros base Annex 3 (Cook & Tanner 2015, base scenario).
 _PAX_BASE_TABLE = {
     'A319': 113, 'A320': 130, 'A321': 158,
@@ -131,69 +131,31 @@ _PAX_BASE_TABLE = {
     'A332': 232, 'E190':  77, 'DH8D':  57,
     'AT72':  52, 'AT43':  36,
 }
-
+ 
 # =============================================================================
 # MAPEO ICAO → TIPO COOK & TANNER (v4.1, 2014)
-#
-# Principio: identificar el tipo Cook cuya estructura de costes (fuel, crew,
-# maintenance, pax) sea lo mas similar posible a la aeronave real. El ajuste
-# por densidad de pasajeros (factor_pax) en _calcular_kpis_ghp corrige despues
-# la diferencia de capacidad, por lo que el mapeo debe capturar la CATEGORIA
-# de operacion (turbofan narrowbody, widebody, turboprop, bizjet), no solo el
-# numero de asientos.
-#
-# Aeronaves del CSV de LEBL con sus mappings:
-#   A320/A20N (173 seats) → A320 (Cook base: 153 seats, pax 130)
-#   A321/A21N (207/220)   → A321 (Cook base: 187 seats, pax 158)
-#   A319      (144)       → A319 (Cook base: 133 seats, pax 113)
-#   B738/B38M (184/189)   → B738 (Cook base: 161 seats, pax 137)
-#   B739      (183)       → B738 (mas cercano operacionalmente)
-#   BCS3      (145)       → A319 (mismo rango de asientos; la A220-300 tiene
-#                           estructura de costes de narrowbody similar a A319)
-#   B733      (142, RECAT E en CSV → probable error de datos; tratamos como
-#                           narrowbody pequeno → B733 de Cook)
-#   B789/B788 (284/266)   → A332 (widebody de capacidad similar)
-#   A332/A333/A338/A339   → A332 (Cook base: 279 seats, pax 232)
-#   A359      (297)       → A332 (mas cercano disponible en Cook)
-#   B764      (245)       → B763 (Cook base: 279 seats, ajuste pax cubre dif.)
-#   B772/B77L/B77W (296-331) → B744 (widebody pesado, estructura similar)
-#   A388      (492)       → B744 (unico jumbo disponible en Cook)
-#   CRJX/CRJ2 (49-100)   → E190 (regional jet, mas cercano en Cook)
-#   E190      (104)       → E190 (match directo)
-#   AT43      (49)        → AT43 (match directo)
-#   Bizjets (GLEX,GLF6,GA5C,C525,C560,C650,C68A,E35L,E50P,
-#            E55P,F2TH,PC24,PC12,CL35) → AT43 como proxy de coste de bizjet
-#            (estructura de coste minima en Cook; el factor_pax = seats_reales/36
-#            escala el coste a la baja automaticamente para aviones con 5-15 pax)
 # =============================================================================
-
+ 
 _FLEET_TO_COOK = {
-    # --- Familia Airbus A320 ---
     'A318': 'A319', 'A319': 'A319',
-    'A320': 'A320', 'A20N': 'A320',   # A320neo -> misma tabla Cook, seats reales del CSV
-    'A321': 'A321', 'A21N': 'A321',   # A321neo -> misma tabla Cook
-    # --- A220 (Bombardier CRJ -> Airbus) ---
-    'BCS1': 'A319',                    # A220-100 (~115 seats) -> A319 (133 seats Cook)
-    'BCS3': 'A319',                    # A220-300 (~145 seats) -> A319 (mas cercano)
-    # --- Boeing 737 classics y NG ---
+    'A320': 'A320', 'A20N': 'A320',
+    'A321': 'A321', 'A21N': 'A321',
+    'BCS1': 'A319',
+    'BCS3': 'A319',
     'B733': 'B733', 'B734': 'B734', 'B735': 'B733', 'B736': 'B733',
     'B737': 'B734',
-    'B738': 'B738', 'B38M': 'B738',   # B737 MAX 8 -> B738 como proxy
-    'B739': 'B738',                    # B737-900 -> B738 (misma familia)
+    'B738': 'B738', 'B38M': 'B738',
+    'B739': 'B738',
     'B752': 'B752', 'B753': 'B752',
-    # --- Embraer comercial ---
     'E170': 'E190', 'E175': 'E190', 'E190': 'E190', 'E195': 'E190',
     'E75L': 'E190', 'E75S': 'E190',
-    # --- CRJ comercial ---
-    'CRJ1': 'AT43', 'CRJ2': 'AT43',   # CRJ-100/200 (~50 seats) -> AT43
-    'CRJ7': 'AT72',                    # CRJ-700 (~70 seats) -> AT72
-    'CRJ9': 'E190', 'CRJX': 'E190',   # CRJ-900/1000 (~90-100 seats) -> E190
-    # --- DHC-8 / Turboprop ---
+    'CRJ1': 'AT43', 'CRJ2': 'AT43',
+    'CRJ7': 'AT72',
+    'CRJ9': 'E190', 'CRJX': 'E190',
     'AT43': 'AT43', 'AT46': 'AT43',
     'AT72': 'AT72', 'ATP':  'AT72',
     'DH8A': 'AT43', 'DH8B': 'AT43', 'DH8C': 'AT43', 'DH8D': 'DH8D',
     'F50':  'AT43', 'F70':  'AT72', 'SB20': 'AT43',
-    # --- Otros narrowbody comerciales ---
     'F100': 'E190', 'RJ1H': 'E190', 'RJ85': 'E190',
     'B712': 'B733', 'B462': 'B733', 'B463': 'B733',
     'MD80': 'B738', 'MD82': 'B738', 'MD83': 'B738',
@@ -201,25 +163,19 @@ _FLEET_TO_COOK = {
     'E120': 'AT43', 'E135': 'AT43', 'E145': 'AT43',
     'B190': 'AT43', 'CARJ': 'AT43', 'SF34': 'AT43',
     'A140': 'AT43', 'A148': 'AT43',
-    # --- Widebody medio (A330 / B787) ---
     'A306': 'B763', 'A310': 'B763',
     'A332': 'A332', 'A333': 'A332', 'A338': 'A332', 'A339': 'A332',
     'A340': 'A332', 'A343': 'A332',
-    'A359': 'A332', 'A35K': 'A332',   # A350-900/1000 -> A332 (mas cercano Cook)
-    'B788': 'A332', 'B789': 'A332',   # B787-8/9 (~260-280 seats) -> A332
-    'B78X': 'B744',                    # B787-10 (~330 seats) -> B744
-    # --- Widebody pesado / jumbo ---
+    'A359': 'A332', 'A35K': 'A332',
+    'B788': 'A332', 'B789': 'A332',
+    'B78X': 'B744',
     'A345': 'B744', 'A346': 'B744',
-    'A388': 'B744',                    # A380 (492 seats) -> B744 (unico jumbo Cook)
+    'A388': 'B744',
     'B744': 'B744', 'B748': 'B744',
     'B762': 'B763', 'B763': 'B763', 'B764': 'B763',
-    'B772': 'B744',                    # B777-200 (~300 seats) -> B744
+    'B772': 'B744',
     'B773': 'B744', 'B77W': 'B744', 'B77L': 'B744',
     'IL96': 'B763', 'T204': 'B763',
-    # --- Business jets / VIP (RECAT E/F en LEBL) ---
-    # Proxy: AT43 como tipo Cook de menor coste disponible.
-    # El factor_pax = (seats_reales x LF) / 36 escala el coste a la baja
-    # automaticamente (p.ej. PC24 con 8 seats → factor ~0.19).
     'GLEX': 'AT43', 'GLF6': 'AT43', 'GLF5': 'AT43', 'GLF4': 'AT43',
     'GA5C': 'AT43', 'GA6C': 'AT43',
     'C525': 'AT43', 'C56X': 'AT43', 'C560': 'AT43', 'C650': 'AT43',
@@ -234,25 +190,13 @@ _FLEET_TO_COOK = {
     'BE40': 'AT43', 'BE20': 'AT43', 'BE9L': 'AT43',
     'PRM1': 'AT43', 'TBM9': 'AT43', 'TBM8': 'AT43',
 }
-
-
+ 
+ 
 def _mapear_tipo_cook(tipo_icao: str, recat: str, seats: int = 0) -> str:
-    """
-    Mapea tipo ICAO al tipo Cook & Tanner v4.1 mas cercano.
-
-    Orden de prioridad:
-      1. Lookup directo en _FLEET_TO_COOK (identificacion exacta por tipo ICAO).
-      2. Fallback por RECAT + seats cuando el tipo no esta en la tabla:
-         - RECAT A/B/C (widebody): B744 si seats > 350, A332 si seats > 240, B763
-         - RECAT D     (narrowbody): A321 si seats > 195, A320 si seats > 160,
-                                     A319 si seats > 130, B733
-         - RECAT E     (regional):   E190 si seats > 80, AT72 si seats > 55, AT43
-         - RECAT F     (ligero):     AT43 (con factor_pax muy bajo)
-    """
     tipo_upper = str(tipo_icao).upper().strip()
     if tipo_upper in _FLEET_TO_COOK:
         return _FLEET_TO_COOK[tipo_upper]
-
+ 
     recat_upper = str(recat).upper()
     if recat_upper in ('A', 'B', 'C'):
         if seats > 350:
@@ -274,37 +218,34 @@ def _mapear_tipo_cook(tipo_icao: str, recat: str, seats: int = 0) -> str:
         if seats > 55:
             return 'AT72'
         return 'AT43'
-    # RECAT F o desconocido
     return 'AT43'
-
-
+ 
+ 
 def _interpolar_coste(tipo_cook: str, delay_min: float, usar_hard: bool) -> float:
-    """Interpolación lineal del coste entre franjas de la tabla."""
     tabla  = _COST_HARD_TABLE if usar_hard else _COST_TOTAL_TABLE
     costes = tabla.get(tipo_cook, tabla['A320'])
     puntos = _DELAY_BREAKPOINTS
-
+ 
     if delay_min <= 0:
         return 0.0
     if delay_min <= puntos[0]:
         return costes[0] * (delay_min / puntos[0])
     if delay_min >= puntos[-1]:
         return float(costes[-1])
-
+ 
     for i in range(len(puntos) - 1):
         if puntos[i] <= delay_min <= puntos[i + 1]:
             t = (delay_min - puntos[i]) / (puntos[i + 1] - puntos[i])
             return costes[i] + t * (costes[i + 1] - costes[i])
-
+ 
     return float(costes[-1])
-
-
+ 
+ 
 # =============================================================================
 # UTILIDAD INTERNA: CO₂ por minuto de vuelo (Aire)
 # =============================================================================
-
+ 
 def _co2_per_min(distancia_km: float, asientos: int, duracion_min: float) -> float:
-    """CO₂ medio por minuto de vuelo en el aire (tasa crucero)."""
     if distancia_km <= 0 or asientos <= 0 or duracion_min <= 0:
         return 0.01
     try:
@@ -313,113 +254,77 @@ def _co2_per_min(distancia_km: float, asientos: int, duracion_min: float) -> flo
     except Exception:
         return 0.01
     return max(co2_total / duracion_min, 0.01)
-
-
+ 
+ 
 # =============================================================================
 # PASO 1: CALCULAR COEFICIENTES r_f PARA CADA VUELO
 # =============================================================================
-
+ 
 def calcular_rf_unitario(df_vuelos: pd.DataFrame) -> pd.Series:
-    """Task 1 (validación): r_f = 1 para todos los vuelos."""
     return pd.Series(1.0, index=df_vuelos.index)
-
-
+ 
+ 
 def calcular_rf_emisiones(df_vuelos: pd.DataFrame) -> pd.Series:
-    """
-    Task 2: r_f = CO₂ por minuto de retraso (kg/min).
-    Candidatos GDP → FEGP en tierra (Red Eléctrica).
-    Exentos        → Tasa crucero en aire (Queroseno).
-    """
     def _apply_co2(fila):
         if fila.get('flight_status') == FS_CANDIDATE:
             recat_str = str(fila.get('recat', 'D')).upper()
             potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 72.0)
-            # Emisiones por minuto conectado al aeropuerto
             co2_fegp_min = potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
             return co2_fegp_min
-
+ 
         distancia = float(fila.get('distancia_km', 0) or 0)
         asientos  = int(fila.get('size_seats_avg', 180) or 180)
         duracion  = float(fila.get('duracion_vuelo_min', 60) or 60)
         return _co2_per_min(distancia_km=distancia, asientos=asientos, duracion_min=duracion)
-
+ 
     return df_vuelos.apply(_apply_co2, axis=1)
-
-
+ 
+ 
 def calcular_rf_coste(df_vuelos: pd.DataFrame) -> pd.Series:
-    """
-    Task 3: r_f — coeficiente de coste marginal por vuelo (EUR/min de delay).
-
-    METODOLOGÍA (Cook & Tanner 2015, University of Westminster):
-
-    1. MAPEO DE AERONAVE:
-       Tipo ICAO → tipo Cook via _mapear_tipo_cook(). Fallback por RECAT + seats.
-
-    2. SELECCIÓN DE TABLA:
-       El r_f se evalúa en OTP_THRESHOLD_MIN = 15 min. En ese punto el delay
-       ya supera el umbral OTP, por lo que Cook aplica costes FULL (con
-       reactionary) → _COST_HARD_TABLE (Tables 26-29, base scenario).
-       Fuente: Cook & Tanner (2015) §3.7, Table 19 — reactionary multipliers
-       son positivos para delay >= 15 min.
-
-    3. AJUSTE POR PASAJEROS REALES (Annex B2):
-       pax_reales = size_seats_avg × LOAD_FACTOR_EU
-       factor_pax = pax_reales / pax_base_cook
-       coste_ajustado = coste_tabla × factor_pax
-
-    4. r_f = coste_ajustado(delay=15 min) / 15  [EUR/min]
-
-    Fuentes: Cook & Tanner (2015) Tables 26-29, Annex B2.
-    """
     rf = pd.Series(index=df_vuelos.index, dtype=float)
-
+ 
     for idx, fila in df_vuelos.iterrows():
         tipo_icao = str(fila.get('ATYP', fila.get('f', ''))).upper().strip()
         asientos  = fila.get('size_seats_avg', 180)
         if pd.isna(asientos) or asientos <= 0:
             asientos = 180
         asientos = int(asientos)
-
+ 
         recat   = str(fila.get('recat', 'D')).upper()
         es_wide = recat in ('A', 'B', 'C')
-
+ 
         tipo_cook = _mapear_tipo_cook(tipo_icao, recat, asientos)
-
-        # r_f evaluado en OTP_THRESHOLD_MIN (15 min): delay >= 15 min activa
-        # costes reactionary segun Cook §3.7 → tabla FULL (_COST_HARD_TABLE).
+ 
         coste_tabla = _interpolar_coste(tipo_cook, OTP_THRESHOLD_MIN, usar_hard=True)
-
+ 
         pax_base   = _PAX_BASE_TABLE.get(tipo_cook, 130)
         pax_reales = max(int(asientos * LOAD_FACTOR_EU), 1)
         factor_pax = pax_reales / pax_base
-
+ 
         coste_ajustado = coste_tabla * factor_pax
         rf[idx] = round(coste_ajustado / OTP_THRESHOLD_MIN, 4)
-
+ 
     return rf
-
-
+ 
+ 
 # =============================================================================
 # PASO 2: CALCULAR TAT DISPONIBLE DESDE EL CSV
 # =============================================================================
-
+ 
 def enriquecer_con_tat(df_vuelos: pd.DataFrame) -> pd.DataFrame:
-    """Asigna el TAT asumiendo el fallback (CSV solo contiene llegadas)."""
     df = df_vuelos.copy()
-    
     recat_col   = df['recat'].fillna('D')
-    # TAT mínimo + 20 min de margen, según comentarios.
     tat_default = recat_col.apply(
         lambda r: TAT_MIN['wide'] + 20 if r in ('A', 'B', 'C')
                   else TAT_MIN['narrow'] + 20
     )
     df['tat_disponible'] = tat_default
     return df
-
+ 
 # =============================================================================
 # PASO 3: SOLVER GHP — PROGRAMACIÓN LINEAL ENTERA BINARIA
 # =============================================================================
-
+ 
 def resolver_ghp(
     df_candidatos: pd.DataFrame,
     df_exentos: pd.DataFrame,
@@ -429,12 +334,11 @@ def resolver_ghp(
     max_air_delay: int = MAX_AIR_DELAY_MIN,
     verbose: bool = False,
 ) -> pd.DataFrame:
-    """Resuelve el GHP como un problema de programación lineal entera binaria."""
     slots = sorted(slots_disponibles)
-
+ 
     slots_ocupados       = set()
     asignaciones_exentos = {}
-
+ 
     for idx, vuelo in df_exentos.sort_values('minutes_eta').iterrows():
         eta = vuelo['minutes_eta']
         slots_elegibles = [
@@ -446,72 +350,71 @@ def resolver_ghp(
         else:
             slots_sin_cap = [s for s in slots if s >= eta and s not in slots_ocupados]
             slot_asignado = slots_sin_cap[0] if slots_sin_cap else eta
-
+ 
         asignaciones_exentos[idx] = slot_asignado
         slots_ocupados.add(slot_asignado)
-
+ 
     slots_para_candidatos = [s for s in slots if s not in slots_ocupados]
-
+ 
     if df_candidatos.empty or not slots_para_candidatos:
         return _construir_resultado(df_candidatos, df_exentos, {}, asignaciones_exentos)
-
+ 
     candidatos_idx = list(df_candidatos.index)
     eta_map        = df_candidatos['minutes_eta'].to_dict()
-
+ 
     if verbose:
         print(f"   [{nombre_problema}] {len(candidatos_idx)} candidatos, "
               f"{len(slots_para_candidatos)} slots disponibles")
-
+ 
     prob = pulp.LpProblem(nombre_problema, pulp.LpMinimize)
-
+ 
     x = {
         (f_idx, t_idx): pulp.LpVariable(f"x_{f_idx}_{t_idx}", cat='Binary')
         for f_idx in candidatos_idx
         for t_idx, t_val in enumerate(slots_para_candidatos)
         if t_val >= eta_map[f_idx]
     }
-
+ 
     prob += pulp.lpSum(
         rf_series.get(f_idx, 1.0) * (slots_para_candidatos[t_idx] - eta_map[f_idx])
         * x[(f_idx, t_idx)]
         for (f_idx, t_idx) in x
     )
-
+ 
     for t_idx in range(len(slots_para_candidatos)):
         vars_en_slot = [x[(f, t)] for (f, t) in x if t == t_idx]
         if vars_en_slot:
             prob += pulp.lpSum(vars_en_slot) <= 1, f"cap_slot_{t_idx}"
-
+ 
     for f_idx in candidatos_idx:
         vars_vuelo = [x[(f, t)] for (f, t) in x if f == f_idx]
         if vars_vuelo:
             prob += pulp.lpSum(vars_vuelo) == 1, f"asig_vuelo_{f_idx}"
-
+ 
     prob.solve(pulp.PULP_CBC_CMD(msg=0))
-
+ 
     if verbose:
         print(f"   [{nombre_problema}] Status: {pulp.LpStatus[prob.status]}")
         print(f"   [{nombre_problema}] Coste óptimo: {pulp.value(prob.objective):.2f}")
-
+ 
     asignaciones_candidatos = {
         f_idx: slots_para_candidatos[t_idx]
         for (f_idx, t_idx), var in x.items()
         if pulp.value(var) is not None and pulp.value(var) > 0.5
     }
-
+ 
     return _construir_resultado(df_candidatos, df_exentos,
                                 asignaciones_candidatos, asignaciones_exentos)
-
-
+ 
+ 
 def _construir_resultado(
     df_candidatos: pd.DataFrame,
     df_exentos: pd.DataFrame,
     asig_candidatos: dict,
     asig_exentos: dict,
 ) -> pd.DataFrame:
-    """Combina candidatos y exentos en un único DataFrame con delays calculados."""
     partes = []
-
+ 
     if not df_candidatos.empty:
         df_c = df_candidatos.copy()
         df_c['assigned_slot'] = df_c.index.map(asig_candidatos)
@@ -519,7 +422,7 @@ def _construir_resultado(
         df_c['ground_delay']  = df_c['total_delay']
         df_c['air_delay']     = 0.0
         partes.append(df_c)
-
+ 
     if not df_exentos.empty:
         df_e = df_exentos.copy()
         df_e['assigned_slot'] = df_e.index.map(asig_exentos)
@@ -527,37 +430,36 @@ def _construir_resultado(
         df_e['air_delay']     = df_e['total_delay']
         df_e['ground_delay']  = 0.0
         partes.append(df_e)
-
+ 
     if not partes:
         return pd.DataFrame()
-
+ 
     return pd.concat(partes).sort_values('minutes_eta').reset_index(drop=False)
-
-
+ 
+ 
 # =============================================================================
 # PASO 4: ORQUESTADOR WP3
 # =============================================================================
-
+ 
 def ejecutar_ghp_completo(
     df_vuelos_etiquetados: pd.DataFrame,
     slots_disponibles: list,
     params: dict,
     verbose: bool = True,
 ) -> dict:
-    """Ejecuta los 3 escenarios GHP del WP3 y devuelve los resultados."""
     df_enriched   = enriquecer_con_tat(df_vuelos_etiquetados)
     h_start       = params['H_START']
     df_en_ventana = df_enriched[df_enriched['minutes_eta'] >= h_start].copy()
-
+ 
     df_candidatos = df_en_ventana[df_en_ventana['flight_status'] == FS_CANDIDATE].copy()
     df_exentos    = df_en_ventana[df_en_ventana['flight_status'] != FS_CANDIDATE].copy()
-
+ 
     if verbose:
         print(f"   GHP: {len(df_candidatos)} candidatos, {len(df_exentos)} exentos")
         print(f"        {len(slots_disponibles)} slots disponibles")
-
+ 
     resultados = {}
-
+ 
     for tarea, rf_fn, nombre in [
         ('task1_validation', calcular_rf_unitario,  'GHP_Task1_Validation'),
         ('task2_emissions',  calcular_rf_emisiones, 'GHP_Task2_Emissions'),
@@ -572,55 +474,31 @@ def ejecutar_ghp_completo(
             nombre_problema=nombre, verbose=verbose,
         )
         resultados[f'rf_{tarea.split("_")[1]}'] = rf
-
-    # Alias de compatibilidad
+ 
     resultados['rf_unitario']  = resultados.pop('rf_task1', resultados.get('rf_validation'))
     resultados['rf_emisiones'] = resultados.pop('rf_task2', resultados.get('rf_emissions'))
     resultados['rf_coste']     = resultados.pop('rf_task3', resultados.get('rf_cost'))
-
+ 
     return resultados
-
-
+ 
+ 
 # =============================================================================
 # PASO 5: KPIs WP3
 # =============================================================================
-
+ 
 def calcular_kpis_ghp(
     df_ghp: pd.DataFrame,
     rf_series: pd.Series,
     nombre_escenario: str = 'GHP',
 ) -> dict:
-    """
-    Calcula los KPIs del WP3 para un escenario GHP.
-
-    COSTE DE RETRASO — Cook & Tanner (2015), University of Westminster:
-      - Por cada vuelo con delay real > 0, se interpola el coste NO LINEAL
-        directamente de las tablas Cook (base scenario, EUR 2014).
-      - Criterio PRIMARY vs FULL por duracion del delay (Cook §3.7, Table 19):
-          · delay <  OTP_THRESHOLD_MIN (15 min) → PRIMARY sin reactionary
-            → _COST_TOTAL_TABLE (hard + soft, Tables 22-25)
-          · delay >= OTP_THRESHOLD_MIN (15 min) → FULL con reactionary
-            → _COST_HARD_TABLE (Tables 26-29)
-        Razon: el CSV solo contiene llegadas a LEBL; no hay datos de salidas
-        para calcular TAT real. Cook establece que el multiplicador reactionary
-        se activa sistematicamente para delays >= 15 min (§3.7.1, Table 19).
-      - El coste se escala: factor_pax = (size_seats_avg x LF) / pax_base_cook
-        (Annex B2), donde LF = LOAD_FACTOR_EU.
-      - rf_series se mantiene en la firma por compatibilidad externa pero ya
-        no interviene en el calculo de coste_delay_eur.
-
-    Fuente: Cook, A., Tanner, G. (2015). European airline delay cost reference
-            values. Version 4.1. University of Westminster / EUROCONTROL PRU.
-    """
     if df_ghp.empty:
         return {}
-
+ 
     df = df_ghp.copy()
     for col in ('total_delay', 'air_delay', 'ground_delay'):
         if col not in df.columns:
             df[col] = 0.0
-
-    # --- Retrasos ---
+ 
     total_delay  = df['total_delay'].sum()
     mean_delay   = df['total_delay'].mean()
     air_delay    = df['air_delay'].sum()
@@ -629,82 +507,56 @@ def calcular_kpis_ghp(
     n_flights    = len(df)
     max_air_obs    = df['air_delay'].max()
     infeasible_air = (df['air_delay'] > MAX_AIR_DELAY_MIN).sum()
-
-    # --- CO₂ del retraso (APU en tierra, crucero en aire) ---
+ 
     def _co2_rate_aire(row):
         return _co2_per_min(
             distancia_km=float(row.get('distancia_km', 0) or 0),
             asientos=int(row.get('size_seats_avg', 180) or 180),
             duracion_min=max(float(row.get('duracion_vuelo_min', 60) or 60), 1),
         )
-
-# Dentro de calcular_kpis_ghp(), sustituye _get_apu_co2 por esto:
+ 
     def _get_fegp_co2(recat):
         recat_str = str(recat).upper() if pd.notna(recat) else 'D'
         potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 72.0)
         return potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
-
+ 
     co2_rate_aire   = df.apply(_co2_rate_aire, axis=1)
     co2_rate_tierra = df.get('recat', pd.Series('D', index=df.index)).apply(_get_fegp_co2)
-
+ 
     co2_aire_delay   = (co2_rate_aire   * df['air_delay']).sum()
     co2_tierra_delay = (co2_rate_tierra * df['ground_delay']).sum()
     co2_total_delay  = co2_aire_delay + co2_tierra_delay
-    
-    # IMPORTANTE: Asegúrate de que el diccionario final retorne esto:
-    # 'co2_tierra_fegp_delay_kg': round(co2_tierra_delay, 2),
-
-    # --- Coste del retraso — Cook & Tanner (2015), Tables 22-29 ---
-    #
-    # PRIMARY (sin reactionary, Tables 22-25, hard+soft) → delay <  15 min
-    # FULL    (con reactionary, Tables 26-29, hard only) → delay >= 15 min
-    #
-    # Razon del criterio por delay y no por TAT:
-    #   El CSV vuelos_finales_gdp.csv solo contiene llegadas a LEBL; no existen
-    #   registros de salidas desde LEBL para el mismo RM, por lo que el TAT
-    #   disponible nunca puede calcularse y todos los vuelos caerian al fallback
-    #   (tat_min+20 → margen 20 >= 15 → siempre PRIMARY → reactionary=0).
-    #   Cook §3.7.1 y Table 19 establecen que el multiplicador reactionary
-    #   se activa para delays >= 15 min de forma sistematica en la red europea.
-    # -------------------------------------------------------------------------
+ 
     coste_total         = 0.0
-    coste_primary_total = 0.0   # vuelos con delay <  15 min (PRIMARY, sin reactionary)
-    coste_react_total   = 0.0   # vuelos con delay >= 15 min (FULL, con reactionary)
-
+    coste_primary_total = 0.0
+    coste_react_total   = 0.0
+ 
     for i, row in df.iterrows():
         delay_real = float(row.get('total_delay', 0) or 0)
         if delay_real <= 0:
             continue
-
+ 
         tipo_icao = str(row.get('ATYP', row.get('f', ''))).upper().strip()
         recat     = str(row.get('recat', 'D')).upper()
         asientos  = int(row.get('size_seats_avg', 180) or 180)
         if asientos <= 0:
             asientos = 180
-
+ 
         tipo_cook = _mapear_tipo_cook(tipo_icao, recat, asientos)
-
-        # PRIMARY (Tables 22-25, hard+soft) si delay <  15 min
-        # FULL    (Tables 26-29, hard only) si delay >= 15 min  [Cook §3.7.1, Table 19]
         usar_hard = delay_real >= OTP_THRESHOLD_MIN
-
-        # Coste Cook interpolado para el delay REAL del vuelo (no lineal por franja)
         coste_tabla = _interpolar_coste(tipo_cook, delay_real, usar_hard)
-
-        # Escalar por densidad de pasajeros reales vs. pax base Cook (Annex B2)
-        # Cook tabula para su LF implicito; ajustamos con el LF real del vuelo.
+ 
         pax_base   = _PAX_BASE_TABLE.get(tipo_cook, 130)
         pax_reales = max(int(asientos * LOAD_FACTOR_EU), 1)
         factor_pax = pax_reales / pax_base
-
+ 
         coste_vuelo  = coste_tabla * factor_pax
         coste_total += coste_vuelo
         if usar_hard:
             coste_react_total   += coste_vuelo
         else:
             coste_primary_total += coste_vuelo
-
-    # --- KPIs por aerolínea (top 4) ---
+ 
     kpis_aerolinea = {}
     if 'airline' in df.columns:
         top_aerolineas = (
@@ -720,7 +572,7 @@ def calcular_kpis_ghp(
                 'delay_total': round(sub['total_delay'].sum(), 2),
                 'delay_std':   round(sub['total_delay'].std(), 2),
             }
-
+ 
     return {
         'escenario':              nombre_escenario,
         'n_flights':              n_flights,
@@ -734,46 +586,168 @@ def calcular_kpis_ghp(
         'co2_aire_delay_kg':      round(co2_aire_delay, 2),
         'co2_tierra_delay_kg':    round(co2_tierra_delay, 2),
         'co2_total_delay_kg':     round(co2_total_delay, 2),
-        # Cook & Tanner (2015) cost — non-linear table lookup per flight
         'coste_delay_eur':        round(coste_total, 2),
         'coste_primary_eur':      round(coste_primary_total, 2),
         'coste_reactionary_eur':  round(coste_react_total, 2),
         'kpis_aerolinea':         kpis_aerolinea,
     }
-
+ 
+ 
+# =============================================================================
+# PASO 6: GENERACIÓN DE GRÁFICAS WP3
+# =============================================================================
+ 
+def generar_graficas_wp3(resultados_ghp: dict, resultados_gdp: dict = None) -> None:
+    """
+    Genera las tres figuras del WP3 y las guarda en disco.
+ 
+    Figura 1 — CO2 por aerolínea (Scenario I, emissions optimisation).
+               Barras apiladas: air delay CO2 + ground delay CO2.
+               Se guarda en: figura1_co2_aerolinea.png
+ 
+    Figura 2 — Curva de coste marginal vs delay (Cook & Tanner 2015).
+               Muestra la no-linealidad para 5 tipos de aeronave.
+               Se guarda en: figura2_curva_coste.png
+ 
+    Figura 3 — Delay medio por aerolínea: GDP vs Scenario I vs Scenario II.
+               Barras agrupadas para las 4 aerolíneas dominantes.
+               Se guarda en: figura3_fairness_aerolineas.png
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+ 
+    AIRLINES = ['VLG', 'RYR', 'EJU', 'DLH']
+    COLOR_AIRE   = '#1D9E75'
+    COLOR_TIERRA = '#9FE1CB'
+    COLOR_GDP    = '#888780'
+    COLOR_SC1    = '#1D9E75'
+    COLOR_SC2    = '#378ADD'
+ 
+    # ------------------------------------------------------------------
+    # Figura 1: CO2 por aerolínea — Scenario I (emissions optimisation)
+    # ------------------------------------------------------------------
+    df_sc1 = resultados_ghp.get('task2_emissions', pd.DataFrame())
+ 
+    if not df_sc1.empty and 'airline' in df_sc1.columns:
+ 
+        def _co2_aire_row(row):
+            return _co2_per_min(
+                distancia_km=float(row.get('distancia_km', 0) or 0),
+                asientos=int(row.get('size_seats_avg', 180) or 180),
+                duracion_min=max(float(row.get('duracion_vuelo_min', 60) or 60), 1),
+            )
+ 
+        def _co2_tierra_row(recat):
+            recat_str = str(recat).upper() if pd.notna(recat) else 'D'
+            potencia_kw = FEGP_KW_PER_RECAT.get(recat_str, 72.0)
+            return potencia_kw * (1 / 60.0) * GRID_EMISSION_FACTOR_KG_KWH
+ 
+        df_sc1 = df_sc1.copy()
+        df_sc1['_co2_rate_aire']   = df_sc1.apply(_co2_aire_row, axis=1)
+        df_sc1['_co2_rate_tierra'] = df_sc1['recat'].apply(_co2_tierra_row) \
+            if 'recat' in df_sc1.columns else 0.34
+ 
+        co2_aire_al   = {}
+        co2_tierra_al = {}
+        for al in AIRLINES:
+            sub = df_sc1[df_sc1['airline'] == al]
+            co2_aire_al[al]   = (sub['_co2_rate_aire']   * sub['air_delay']).sum()
+            co2_tierra_al[al] = (sub['_co2_rate_tierra'] * sub['ground_delay']).sum()
+ 
+        aire_vals   = [co2_aire_al.get(a, 0)   for a in AIRLINES]
+        tierra_vals = [co2_tierra_al.get(a, 0) for a in AIRLINES]
+ 
+        x = np.arange(len(AIRLINES))
+        w = 0.5
+ 
+        fig1, ax1 = plt.subplots(figsize=(8, 5))
+        ax1.bar(x, aire_vals,   w, label='Air delay CO₂',    color=COLOR_AIRE)
+        ax1.bar(x, tierra_vals, w, label='Ground delay CO₂', color=COLOR_TIERRA,
+                bottom=aire_vals)
+ 
+        for i, (a, g) in enumerate(zip(aire_vals, tierra_vals)):
+            total = a + g
+            if total > 0:
+                ax1.text(i, total + 20, f'{total:.0f} kg',
+                         ha='center', va='bottom', fontsize=9)
+ 
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(AIRLINES)
+        ax1.set_ylabel('CO₂ (kg)')
+        ax1.set_xlabel('Airline')
+        ax1.set_title('CO₂ delay emissions by airline — Scenario I (emissions optimisation)')
+        ax1.legend()
+        fig1.tight_layout()
+        fig1.savefig('figura1_co2_aerolinea.png', dpi=150)
+        plt.close(fig1)
+        print("   [Figura 1] Guardada: figura1_co2_aerolinea.png")
+ 
+    # ------------------------------------------------------------------
+    # Figura 2: Curva de coste (Cook & Tanner 2015) — no-linealidad
+    # ------------------------------------------------------------------
+    delays = np.linspace(0, 300, 600)
+ 
+    tipos_plot  = ['A320', 'B738', 'A332', 'B744', 'E190']
+    colores_plot = ['#1D9E75', '#378ADD', '#D85A30', '#7F77DD', '#888780']
+    labels_plot  = ['A320 (narrowbody)', 'B738 (narrowbody)',
+                    'A332 (widebody)',   'B744 (heavy)',
+                    'E190 (regional)']
+ 
+    fig2, ax2 = plt.subplots(figsize=(9, 5))
+    for tipo, color, label in zip(tipos_plot, colores_plot, labels_plot):
+        costes = []
+        pax_base = _PAX_BASE_TABLE.get(tipo, 130)
+        pax_reales = pax_base * LOAD_FACTOR_EU
+        factor_pax = pax_reales / pax_base
+        for d in delays:
+            usar_hard = d >= OTP_THRESHOLD_MIN
+            c = _interpolar_coste(tipo, d, usar_hard)
+            costes.append(c * factor_pax)
+        ax2.plot(delays, costes, label=label, color=color, linewidth=1.8)
+ 
+    ax2.axvline(OTP_THRESHOLD_MIN, color='gray', linestyle='--',
+                linewidth=1.0, label=f'OTP threshold ({OTP_THRESHOLD_MIN} min)')
+    ax2.set_xlabel('Delay (min)')
+    ax2.set_ylabel('Total delay cost (EUR)')
+    ax2.set_title('Delay cost by aircraft type — Cook & Tanner 2015 (non-linear)')
+    ax2.legend(fontsize=9)
+    fig2.tight_layout()
+    fig2.savefig('figura2_curva_coste.png', dpi=150)
+    plt.close(fig2)
+    print("   [Figura 2] Guardada: figura2_curva_coste.png")
 
 # =============================================================================
 # MODO DEBUG
 # =============================================================================
-
+ 
 if __name__ == '__main__':
     import os, sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
+ 
     import lib_data_prep as prep
     import lib_gdp_core  as gdp
-
+ 
     print("🛠️  MODO DEBUG: lib_ghp_solver.py")
     base     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     p_vuelos = os.path.join(base, 'data/raw/LEBL_10AUG2025.csv')
     p_flota  = os.path.join(base, 'data/raw/fleet_cat_seat.csv')
-
+ 
     params    = CFG.to_params_dict()
     df_vuelos = prep.preparar_vuelos(p_vuelos, p_flota)
-
+ 
     resultados_gdp = gdp.ejecutar_nucleo_gdp(df_vuelos, params)
     df_etiquetado  = resultados_gdp['vuelos_asignados']
     slots_list     = list(resultados_gdp['slots']['slot_start_min'])
-
+ 
     resultados_ghp = ejecutar_ghp_completo(
         df_etiquetado, slots_list, params, verbose=True
     )
-
+ 
     df_val    = resultados_ghp['task1_validation']
     rf_1      = resultados_ghp['rf_unitario']
     kpis_val  = calcular_kpis_ghp(df_val, rf_1, 'Task1_Validation')
     coste_gdp = resultados_gdp['vuelos_asignados']['total_delay'].sum()
-
+ 
     print(f"\n{'='*50}")
     print(f"  VALIDACIÓN Task 1:")
     print(f"  Delay total GHP: {kpis_val['total_delay_min']:.2f} min")
@@ -781,14 +755,12 @@ if __name__ == '__main__':
     diff_pct = abs(kpis_val['total_delay_min'] - coste_gdp) / max(coste_gdp, 1) * 100
     print(f"  Diferencia: {diff_pct:.1f}%  {'✅ OK' if diff_pct < 5 else '⚠️ Revisar'}")
     print(f"{'='*50}")
-
-    # AQUÍ ESTÁ LA MAGIA: Añadida la task1_validation al bucle
+ 
     for escenario, rf_key in [
         ('task1_validation', 'rf_unitario'),
         ('task2_emissions',  'rf_emisiones'),
         ('task3_cost',       'rf_coste'),
     ]:
-        
         df_esc = resultados_ghp[escenario]
         rf_esc = resultados_ghp[rf_key]
         kpis   = calcular_kpis_ghp(df_esc, rf_esc, escenario)
@@ -807,6 +779,15 @@ if __name__ == '__main__':
             print(f"    KPIs aerolíneas:")
             for al, kpi in kpis['kpis_aerolinea'].items():
                 print(f"      {al}: n={kpi['n_vuelos']}, "
-                    f"delay_medio={kpi['delay_medio']:.1f}, "
-                    f"delay_total={kpi['delay_total']:.1f}, "
-                    f"delay_std={kpi['delay_std']:.1f}")
+                      f"delay_medio={kpi['delay_medio']:.1f}, "
+                      f"delay_total={kpi['delay_total']:.1f}, "
+                      f"delay_std={kpi['delay_std']:.1f}")
+ 
+    # ------------------------------------------------------------------
+    # Generar las figuras del WP3
+    # ------------------------------------------------------------------
+    print(f"\n{'='*50}")
+    print("  Generando figuras WP3...")
+    generar_graficas_wp3(resultados_ghp, resultados_gdp)
+    print("  Figuras generadas correctamente.")
+    print(f"{'='*50}")
