@@ -136,9 +136,9 @@ def generar_comparativa_intermodal(
     h_noreg_red = resultados_reducido['resultados_gdp']['h_noreg']
 
     # 2. Extraemos los DataFrames re-simulados (Intermodales)
-    df_red_GDP  = resultados_reducido['resultados_ghp']['task1_validation']
-    df_red_co2  = resultados_reducido['resultados_ghp']['task2_emissions']
-    df_red_cost = resultados_reducido['resultados_ghp']['task3_cost'] 
+    df_red_GDP  = resultados_reducido['resultados_ghp']['GDP_Aditional_Constraints']
+    df_red_co2  = resultados_reducido['resultados_ghp']['GHP_Opt_Emissions']
+    df_red_cost = resultados_reducido['resultados_ghp']['GHP_Opt_Cost'] 
     
     # 3. Calculamos KPIs con el MISMO MOTOR que el WP3 (lib_metrics)
     kpis_red_GDP  = evaluar_escenario(df_red_GDP, 'Intermodal_GDP', h_start_min)
@@ -176,7 +176,7 @@ def generar_comparativa_intermodal(
             h_noreg_red - h_start_min,
             round(kpis_red_GDP['CO2_Total_Retraso_kg'], 1),  
             round(co2_nominal_reducido + kpis_red_GDP['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
-            int(kpis_red_GDP['Coste_Cook_EUR']),         
+            int(kpis_red_GDP['Coste_Cook_Total_EUR']),         
             round(ahorro_co2_tren_directo, 1),
         ],
         'Intermodal (Opt. Costes)': [
@@ -186,7 +186,7 @@ def generar_comparativa_intermodal(
             h_noreg_red - h_start_min,
             round(kpis_red_cost['CO2_Total_Retraso_kg'], 1),  
             round(co2_nominal_reducido + kpis_red_cost['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
-            int(kpis_red_cost['Coste_Cook_EUR']),         
+            int(kpis_red_cost['Coste_Cook_Total_EUR']),         
             round(ahorro_co2_tren_directo, 1),
         ],
         'Intermodal (Opt. Emisiones)': [
@@ -196,7 +196,7 @@ def generar_comparativa_intermodal(
             h_noreg_red - h_start_min,
             round(kpis_red_co2['CO2_Total_Retraso_kg'], 1),  
             round(co2_nominal_reducido + kpis_red_co2['CO2_Total_Retraso_kg'] + co2_tren_total, 1),
-            int(kpis_red_co2['Coste_Cook_EUR']),         
+            int(kpis_red_co2['Coste_Cook_Total_EUR']),         
             round(ahorro_co2_tren_directo, 1),
         ],
     })

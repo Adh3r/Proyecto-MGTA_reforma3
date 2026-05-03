@@ -72,8 +72,8 @@ def ejecutar_proyecto_completo() -> None:
     print(f"   • Retraso medio global:   {df_final['total_delay'].mean():.1f} min/vuelo")
 
     # Inicializamos el diccionario maestro de escenarios y la lista de KPIs
-    escenarios_dict = {'GDP_RBS': df_final}
-    lista_kpis = [evaluar_escenario(df_final, 'GDP_RBS', h_start_min)]
+    escenarios_dict = {'GDP_Basic_Scenario': df_final}
+    lista_kpis = [evaluar_escenario(df_final, 'GDP_Basic_Scenario', h_start_min)]
 
     # -------------------------------------------------------------------------
     # WP2 (EXTRA): ANÁLISIS DE SENSIBILIDAD
@@ -99,10 +99,10 @@ def ejecutar_proyecto_completo() -> None:
     )
     
     # Evaluamos y almacenamos los escenarios GHP usando el motor unificado
-    for nombre_task in ['task1_validation', 'task2_emissions', 'task3_cost']:
+    for nombre_task in ['GDP_Aditional_Constraints', 'GHP_Opt_Emissions', 'GHP_Opt_Cost']:
         df_task = resultados_ghp[nombre_task]
-        escenarios_dict[f'GHP_{nombre_task}'] = df_task
-        lista_kpis.append(evaluar_escenario(df_task, f'GHP_{nombre_task}', h_start_min))
+        escenarios_dict[f'WP3_{nombre_task}'] = df_task
+        lista_kpis.append(evaluar_escenario(df_task, f'WP3_{nombre_task}', h_start_min))
     
     # Construimos el Dashboard Comparativo (DataFrame) maestro
     df_dashboard = pd.DataFrame(lista_kpis)
@@ -136,57 +136,57 @@ def ejecutar_proyecto_completo() -> None:
             'Ahorro neto CO₂ directo por Tren (kg)',
             'Equidad RSD (%)'
         ],
-        'GDP (RBS Base)': [
+        'GDP Basic Scenario': [
             demanda_total,
-            round(get_kpi('GDP_RBS', 'Retraso_Total_min'), 1),
+            round(get_kpi('GDP_Basic_Scenario', 'Retraso_Total_min'), 1),
             h_noreg_base,
             duracion_impacto,
-            round(get_kpi('GDP_RBS', 'CO2_Total_Retraso_kg'), 1),
-            round(co2_nominal_base + get_kpi('GDP_RBS', 'CO2_Total_Retraso_kg'), 1),
-            int(get_kpi('GDP_RBS', 'Coste_Cook_EUR')),
+            round(get_kpi('GDP_Basic_Scenario', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('GDP_Basic_Scenario', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('GDP_Basic_Scenario', 'Coste_Cook_Total_EUR')),
             'N/A', 
-            round(get_kpi('GDP_RBS', 'Equidad_RSD_%'), 2)
+            round(get_kpi('GDP_Basic_Scenario', 'RSD_Total_%'), 2)
         ],
-        'GHP (Validación)': [
+        'GDP Aditional Constraints': [
             demanda_total,
-            round(get_kpi('GHP_task1_validation', 'Retraso_Total_min'), 1),
+            round(get_kpi('WP3_GDP_Aditional_Constraints', 'Retraso_Total_min'), 1),
             h_noreg_base,
             duracion_impacto,
-            round(get_kpi('GHP_task1_validation', 'CO2_Total_Retraso_kg'), 1),
-            round(co2_nominal_base + get_kpi('GHP_task1_validation', 'CO2_Total_Retraso_kg'), 1),
-            int(get_kpi('GHP_task1_validation', 'Coste_Cook_EUR')),
+            round(get_kpi('WP3_GDP_Aditional_Constraints', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('WP3_GDP_Aditional_Constraints', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('WP3_GDP_Aditional_Constraints', 'Coste_Cook_Total_EUR')),
             'N/A', 
-            round(get_kpi('GHP_task1_validation', 'Equidad_RSD_%'), 2)
+            round(get_kpi('WP3_GDP_Aditional_Constraints', 'RSD_Total_%'), 2)
         ],
-        'GHP (Opt. Costes)': [
+        'GHP Opt Cost': [
             demanda_total,
-            round(get_kpi('GHP_task3_cost', 'Retraso_Total_min'), 1),
+            round(get_kpi('WP3_GHP_Opt_Cost', 'Retraso_Total_min'), 1),
             h_noreg_base,
             duracion_impacto,
-            round(get_kpi('GHP_task3_cost', 'CO2_Total_Retraso_kg'), 1),
-            round(co2_nominal_base + get_kpi('GHP_task3_cost', 'CO2_Total_Retraso_kg'), 1),
-            int(get_kpi('GHP_task3_cost', 'Coste_Cook_EUR')),
+            round(get_kpi('WP3_GHP_Opt_Cost', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('WP3_GHP_Opt_Cost', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('WP3_GHP_Opt_Cost', 'Coste_Cook_Total_EUR')),
             'N/A', 
-            round(get_kpi('GHP_task3_cost', 'Equidad_RSD_%'), 2)
+            round(get_kpi('WP3_GHP_Opt_Cost', 'RSD_Total_%'), 2)
         ],
-        'GHP (Opt. Emisiones)': [
+        'GHP Opt Emissions': [
             demanda_total,
-            round(get_kpi('GHP_task2_emissions', 'Retraso_Total_min'), 1),
+            round(get_kpi('WP3_GHP_Opt_Emissions', 'Retraso_Total_min'), 1),
             h_noreg_base,
             duracion_impacto,
-            round(get_kpi('GHP_task2_emissions', 'CO2_Total_Retraso_kg'), 1),
-            round(co2_nominal_base + get_kpi('GHP_task2_emissions', 'CO2_Total_Retraso_kg'), 1),
-            int(get_kpi('GHP_task2_emissions', 'Coste_Cook_EUR')),
+            round(get_kpi('WP3_GHP_Opt_Emissions', 'CO2_Total_Retraso_kg'), 1),
+            round(co2_nominal_base + get_kpi('WP3_GHP_Opt_Emissions', 'CO2_Total_Retraso_kg'), 1),
+            int(get_kpi('WP3_GHP_Opt_Emissions', 'Coste_Cook_Total_EUR')),
             'N/A', 
-            round(get_kpi('GHP_task2_emissions', 'Equidad_RSD_%'), 2)
+            round(get_kpi('WP3_GHP_Opt_Emissions', 'RSD_Total_%'), 2)
         ]
     })
 
     print("\n 📊 RESUMEN EJECUTIVO WP3 (Sin Intermodalidad):")
-    print(f"{'Métrica':>38} | {'GDP (RBS Base)':>18} | {'GHP (Validación)':>18} | {'GHP (Opt. Costes)':>20} | {'GHP (Opt. Emis.)':>20}")
+    print(f"{'Métrica':>38} | {'GDP Basic Scenario':>18} | {'GDP Aditional Constraints':>18} | {'GHP Opt Cost':>20} | {'GHP Opt Emissions':>20}")
     print("-" * 125)
     for _, row in comparativa_wp3.iterrows():
-        print(f"{row['Métrica']:>38} | {str(row['GDP (RBS Base)']):>18} | {str(row['GHP (Validación)']):>18} | {str(row['GHP (Opt. Costes)']):>20} | {str(row['GHP (Opt. Emisiones)']):>20}")
+        print(f"{row['Métrica']:>38} | {str(row['GDP Basic Scenario']):>18} | {str(row['GDP Aditional Constraints']):>18} | {str(row['GHP Opt Cost']):>20} | {str(row['GHP Opt Emissions']):>20}")
 
     # Guardamos ambos (el original crudo para auditoría y el visual para los gráficos)
     path_wp3_original = os.path.join(BASE_DIR, 'data/processed/wp3_dashboard_crudo.csv')
@@ -215,14 +215,17 @@ def ejecutar_proyecto_completo() -> None:
             df_tabla_intermodal = resultados_wp4['df_comparativa']
             
             # 2. Capturamos los resultados del GHP para las DOS funciones de coste
-            df_intermodal_coste = resultados_wp4['resultados_reducido']['resultados_ghp']['task3_cost']
-            df_intermodal_co2 = resultados_wp4['resultados_reducido']['resultados_ghp']['task2_emissions']
+            df_intermodal_gdp = resultados_wp4['resultados_reducido']['resultados_ghp']['GDP_Aditional_Constraints']
+            df_intermodal_coste = resultados_wp4['resultados_reducido']['resultados_ghp']['GHP_Opt_Cost']
+            df_intermodal_co2 = resultados_wp4['resultados_reducido']['resultados_ghp']['GHP_Opt_Emissions']
             
             # 3. Los inyectamos en el diccionario general de escenarios
+            escenarios_dict['Intermodal_GDP'] = df_intermodal_gdp
             escenarios_dict['Intermodal_GHP_Coste'] = df_intermodal_coste
             escenarios_dict['Intermodal_GHP_CO2'] = df_intermodal_co2
             
             # 4. Actualizamos el Dashboard general (WP5)
+            lista_kpis.append(evaluar_escenario(df_intermodal_gdp, 'Intermodal_GDP', h_start_min))
             lista_kpis.append(evaluar_escenario(df_intermodal_coste, 'Intermodal_GHP_Coste', h_start_min))
             lista_kpis.append(evaluar_escenario(df_intermodal_co2, 'Intermodal_GHP_CO2', h_start_min))
             df_dashboard = pd.DataFrame(lista_kpis)
