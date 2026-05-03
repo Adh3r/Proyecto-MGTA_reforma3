@@ -461,9 +461,9 @@ def ejecutar_ghp_completo(
     resultados = {}
  
     for tarea, rf_fn, nombre in [
-        ('task1_validation', calcular_rf_unitario,  'GHP_Task1_Validation'),
-        ('task2_emissions',  calcular_rf_emisiones, 'GHP_Task2_Emissions'),
-        ('task3_cost',       calcular_rf_coste,     'GHP_Task3_Cost'),
+        ('GDP_Aditional_Constraints', calcular_rf_unitario,  'GHP_Task1_Validation'),
+        ('GHP_Opt_Emissions',  calcular_rf_emisiones, 'GHP_Task2_Emissions'),
+        ('GHP_Opt_Cost',       calcular_rf_coste,     'GHP_Task3_Cost'),
     ]:
         if verbose:
             print(f"\n   [{nombre}] Calculando r_f...")
